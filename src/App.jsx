@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { sb } from "./supabase";
 
 // ─── SheetJS ────────────────────────────────────────────────────────────────
 function useXLSX() {
