@@ -1,5 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { sb } from "./supabase";
+import { createClient } from "@supabase/supabase-js";
+
+const sb = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_KEY
+);
 
 // ─── SheetJS ────────────────────────────────────────────────────────────────
 function useXLSX() {
