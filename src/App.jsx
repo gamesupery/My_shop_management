@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { supabase } from "./supabase";
 
 // ── โหลด SheetJS ──────────────────────────────────────────────────────────
 function useXLSX() {
@@ -135,17 +136,88 @@ export default function App() {
     searchRef.current?.focus();
   };
 
+  const loadOrdersFromDB = async () => {
+  const { data, error } = await supabase
+    .from("orders")
+    .select("*, order_lines(*)")
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error(error);
+    return;
+  }
+
+  const formatted = data.map(o => ({
+    id: o.id,
+    date: o.created_at,
+    custType: o.cust_type,
+    custName: o.cust_name,
+    bikeBrand: o.bike_brand,
+    total: o.total,
+    lines: o.order_lines.map(l => ({
+      partName: l.part_name,
+      qty: l.qty,
+      unitPrice: l.unit_price,
+      total: l.total,
+      note: l.note
+    }))
+  }));
+
+  setOrders(formatted);
+};
+
   const txTotal = lines.reduce((s,l)=>s+l.total,0);
 
-  const saveTransaction = () => {
-    if (!lines.length) return;
-    setOrders(o=>[...o,{
-      id:Date.now(), date:nowISO(), custType,
-      custName:custName.trim()||"—", bikeBrand:bikeBrand.trim()||"—",
-      lines, total:txTotal,
-    }]);
-    setLines([]); setCustName(""); setBikeBrand("");
-  };
+  const saveTransaction = async () => {
+  if (!lines.length) return;
+
+  // 1. บันทึก order
+  const { data: order, error } = await supabase
+    .from("orders")
+    .insert([{
+      cust_type: custType,
+      cust_name: custName || "—",
+      bike_brand: bikeBrand || "—",
+      total: txTotal
+    }])
+    .select()
+    .single();
+
+  if (error) {
+    alert("บันทึกไม่สำเร็จ ❌");
+    console.error(error);
+    return;
+  }
+
+  // 2. บันทึกรายการอะไหล่
+  const lineData = lines.map(l => ({
+    order_id: order.id,
+    part_name: l.partName,
+    qty: l.qty,
+    unit_price: l.unitPrice,
+    total: l.total,
+    note: l.note
+  }));
+
+  const { error: lineError } = await supabase
+    .from("order_lines")
+    .insert(lineData);
+
+  if (lineError) {
+    alert("บันทึกสินค้าไม่สำเร็จ ❌");
+    console.error(lineError);
+    return;
+  }
+
+  alert("บันทึกสำเร็จ ✅");
+
+  setLines([]);
+  setCustName("");
+  setBikeBrand("");
+
+  // โหลดใหม่
+  loadOrdersFromDB();
+};
 
   // ── Export Excel รายเดือน แยกชีทตามประเภทลูกค้า ───────────────
   const exportMonth = mk => {
@@ -190,11 +262,9 @@ export default function App() {
     XLSX.writeFile(wb,`MotoShop_${mk}.xlsx`);
   };
 
-  useEffect(()=>{
-    const h=e=>{ if (!e.target.closest(".srch-wrap")) setShowDrop(false); };
-    document.addEventListener("mousedown",h);
-    return()=>document.removeEventListener("mousedown",h);
-  },[]);
+  useEffect(() => {
+   loadOrdersFromDB();
+}, []);
 
   const historyRows  = orders.filter(o=>monthKey(o.date)===filterMonth&&(filterType==="all"||o.custType===filterType)).sort((a,b)=>b.id-a.id);
   const historyTotal = historyRows.reduce((s,o)=>s+o.total,0);
