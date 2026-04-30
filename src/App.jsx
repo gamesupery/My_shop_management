@@ -1,7 +1,6 @@
-import { useState, useRef, useEffect, useCallback } from "react";
-import { supabase } from "./supabase";
+import { useState, useEffect, useRef, useCallback } from "react";
 
-// ── โหลด SheetJS ──────────────────────────────────────────────────────────
+// ─── SheetJS ────────────────────────────────────────────────────────────────
 function useXLSX() {
   const [ready, setReady] = useState(!!window.XLSX);
   useEffect(() => {
@@ -12,682 +11,766 @@ function useXLSX() {
     document.head.appendChild(s);
   }, []);
   return ready;
-}
+} 
 
-// ── ประเภทลูกค้า ─────────────────────────────────────────────────────────
-const CUST_TYPES = [
-  { id:"retail",    label:"ลูกค้าทั่วไป",       sub:"ราคาเต็ม + ค่าแรง",      color:"#4fc3f7", icon:"🔧", priceKey:"retailPrice"    },
-  { id:"diy",       label:"ซื้อเอง/เปลี่ยนเอง", sub:"ซื้ออะไหล่ ราคา DIY",    color:"#81c784", icon:"🛠️", priceKey:"diyPrice"       },
-  { id:"wholesale", label:"ร้านค้า/ส่ง",         sub:"ราคาส่ง ลดพิเศษ",        color:"#ffb74d", icon:"🏪", priceKey:"wholesalePrice" },
+// ─── Supabase ────────────────────────────────────────────────────────────────
+import { createClient } from "@supabase/supabase-js";
+const SUPABASE_URL = "YOUR_SUPABASE_URL";      // ← เปลี่ยนตรงนี้
+const SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY"; // ← เปลี่ยนตรงนี้
+const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ─── ประเภทลูกค้า ────────────────────────────────────────────────────────────
+const CUST = [
+  { id:"retail",    th:"ลูกค้าทั่วไป", icon:"🔧", color:"#3b82f6", key:"retailPrice"    },
+  { id:"diy",       th:"ซื้อเอง",       icon:"🛠️", color:"#22c55e", key:"diyPrice"       },
+  { id:"wholesale", th:"ร้านค้า/ส่ง",  icon:"🏪", color:"#f97316", key:"wholesalePrice" },
 ];
 
-// ── รายการอะไหล่เริ่มต้น (3 ราคาแยกกัน) ─────────────────────────────────
+const MONTHS_TH = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.",
+                   "ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+
+// ─── Utilities ───────────────────────────────────────────────────────────────
+const fmt     = n   => Number(n).toLocaleString("th-TH");
+const p2      = n   => String(n).padStart(2,"0");
+const nowISO  = ()  => { const d=new Date(); return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}`; };
+const todayTH = ()  => { const d=new Date(); return `${p2(d.getDate())}/${p2(d.getMonth()+1)}/${d.getFullYear()+543}`; };
+const mk      = iso => iso?.slice(0,7)??"";
+const mlabel  = key => { if(!key)return""; const[y,m]=key.split("-"); return `${MONTHS_TH[+m-1]} ${+y+543}`; };
+const catPrice= (part,type) => { const k=(CUST.find(c=>c.id===type)||CUST[0]).key; return part[k]??part.retailPrice; };
+
+// ─── Default parts ───────────────────────────────────────────────────────────
 const DEFAULT_PARTS = [
-  { name:"ไส้กรองน้ำมันเครื่อง",    retailPrice:120,  diyPrice:110,  wholesalePrice:80   },
-  { name:"หัวเทียน",                retailPrice:85,   diyPrice:78,   wholesalePrice:55   },
-  { name:"ผ้าเบรกหน้า",             retailPrice:350,  diyPrice:320,  wholesalePrice:220  },
-  { name:"ผ้าเบรกหลัง",             retailPrice:280,  diyPrice:260,  wholesalePrice:180  },
-  { name:"โซ่ขับเคลื่อน",           retailPrice:480,  diyPrice:450,  wholesalePrice:320  },
-  { name:"ชุดสเตอร์",               retailPrice:650,  diyPrice:600,  wholesalePrice:420  },
-  { name:"ไส้กรองอากาศ",            retailPrice:180,  diyPrice:165,  wholesalePrice:120  },
-  { name:"น้ำมันเครื่อง (1L)",       retailPrice:220,  diyPrice:205,  wholesalePrice:150  },
-  { name:"ยางหน้า",                 retailPrice:950,  diyPrice:900,  wholesalePrice:700  },
-  { name:"ยางหลัง",                 retailPrice:1100, diyPrice:1050, wholesalePrice:820  },
-  { name:"แบตเตอรี่",               retailPrice:890,  diyPrice:850,  wholesalePrice:650  },
-  { name:"สายคลัทช์",               retailPrice:150,  diyPrice:140,  wholesalePrice:100  },
-  { name:"สายคันเร่ง",              retailPrice:140,  diyPrice:130,  wholesalePrice:95   },
-  { name:"สายเบรก",                 retailPrice:130,  diyPrice:120,  wholesalePrice:88   },
-  { name:"หลอดไฟหน้า",              retailPrice:95,   diyPrice:88,   wholesalePrice:60   },
-  { name:"หลอดไฟเลี้ยว",            retailPrice:35,   diyPrice:32,   wholesalePrice:22   },
-  { name:"จานเบรกหน้า",             retailPrice:850,  diyPrice:800,  wholesalePrice:600  },
-  { name:"โช้คหลัง",                retailPrice:1200, diyPrice:1100, wholesalePrice:880  },
-  { name:"หัวคาร์บูเรเตอร์",         retailPrice:75,   diyPrice:70,   wholesalePrice:50   },
-  { name:"ไส้กรองน้ำมันเชื้อเพลิง",  retailPrice:110,  diyPrice:100,  wholesalePrice:72   },
+  {name:"ไส้กรองน้ำมันเครื่อง", retailPrice:120, diyPrice:110, wholesalePrice:80},
+  {name:"หัวเทียน",              retailPrice:85,  diyPrice:78,  wholesalePrice:55},
+  {name:"ผ้าเบรกหน้า",          retailPrice:350, diyPrice:320, wholesalePrice:220},
+  {name:"ผ้าเบรกหลัง",          retailPrice:280, diyPrice:260, wholesalePrice:180},
+  {name:"โซ่ขับเคลื่อน",        retailPrice:480, diyPrice:450, wholesalePrice:320},
+  {name:"ไส้กรองอากาศ",         retailPrice:180, diyPrice:165, wholesalePrice:120},
+  {name:"น้ำมันเครื่อง (1L)",    retailPrice:220, diyPrice:205, wholesalePrice:150},
+  {name:"ยางหน้า",              retailPrice:950, diyPrice:900, wholesalePrice:700},
+  {name:"ยางหลัง",              retailPrice:1100,diyPrice:1050,wholesalePrice:820},
+  {name:"แบตเตอรี่",            retailPrice:890, diyPrice:850, wholesalePrice:650},
+  {name:"สายคลัทช์",            retailPrice:150, diyPrice:140, wholesalePrice:100},
+  {name:"หลอดไฟหน้า",           retailPrice:95,  diyPrice:88,  wholesalePrice:60},
+  {name:"จานเบรกหน้า",          retailPrice:850, diyPrice:800, wholesalePrice:600},
+  {name:"โช้คหลัง",             retailPrice:1200,diyPrice:1100,wholesalePrice:880},
 ];
 
-// ── ชื่อเดือนภาษาไทย ──────────────────────────────────────────────────────
-const MONTHS_TH = ["มกราคม","กุมภาพันธ์","มีนาคม","เมษายน","พฤษภาคม","มิถุนายน",
-                   "กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม"];
-
-const fmtN = n => Number(n).toLocaleString("th-TH");
-const todayStr = () => {
-  const d = new Date();
-  return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()+543}`;
+// ─── Theme definitions ───────────────────────────────────────────────────────
+const THEMES = {
+  light: {
+    bg:          "#f2f4f7",
+    card:        "#ffffff",
+    cardBorder:  "transparent",
+    header:      "#ffffff",
+    headerBorder:"#f0f0f0",
+    tabBar:      "#ffffff",
+    tabBorder:   "#f0f0f0",
+    tabActive:   "#3b82f6",
+    text:        "#111111",
+    textSub:     "#6b7280",
+    textMuted:   "#9ca3af",
+    inp:         "#ffffff",
+    inpBorder:   "#e5e7eb",
+    inpText:     "#111111",
+    divider:     "#f3f4f6",
+    hintBg:      "#f0f9ff",
+    previewBg:   "#eff6ff",
+    ctypeBg:     "#f9fafb",
+    ctypeBorder: "#e5e7eb",
+    dropBg:      "#ffffff",
+    dropBorder:  "#e5e7eb",
+    dropHover:   "#f8fafc",
+    delBorder:   "#fecaca",
+    delColor:    "#ef4444",
+    shadow:      "0 1px 4px rgba(0,0,0,0.07)",
+    shadowMd:    "0 2px 8px rgba(0,0,0,0.08)",
+    saveBg:      "#111111",
+    saveColor:   "#ffffff",
+    sectLabel:   "#9ca3af",
+    toggleBg:    "#e5e7eb",
+    toggleThumb: "#ffffff",
+    sumBorder:   "#e5e7eb",
+    lineDivider: "#f0f0f0",
+  },
+  dark: {
+    bg:          "#0f1117",
+    card:        "#1c1f26",
+    cardBorder:  "#2a2d36",
+    header:      "#1c1f26",
+    headerBorder:"#2a2d36",
+    tabBar:      "#1c1f26",
+    tabBorder:   "#2a2d36",
+    tabActive:   "#60a5fa",
+    text:        "#f1f5f9",
+    textSub:     "#94a3b8",
+    textMuted:   "#64748b",
+    inp:         "#12151c",
+    inpBorder:   "#2e3340",
+    inpText:     "#f1f5f9",
+    divider:     "#22262f",
+    hintBg:      "#1e2a3a",
+    previewBg:   "#1a2540",
+    ctypeBg:     "#12151c",
+    ctypeBorder: "#2e3340",
+    dropBg:      "#1c1f26",
+    dropBorder:  "#3b82f6",
+    dropHover:   "#22262f",
+    delBorder:   "#7f1d1d",
+    delColor:    "#f87171",
+    shadow:      "0 1px 8px rgba(0,0,0,0.4)",
+    shadowMd:    "0 4px 16px rgba(0,0,0,0.5)",
+    saveBg:      "#f1f5f9",
+    saveColor:   "#111111",
+    sectLabel:   "#475569",
+    toggleBg:    "#3b82f6",
+    toggleThumb: "#ffffff",
+    sumBorder:   "#2e3340",
+    lineDivider: "#22262f",
+  },
 };
-const nowISO = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-};
-const monthKey   = iso => iso.slice(0,7);
-const monthLabel = key => { const [y,m]=key.split("-"); return `${MONTHS_TH[parseInt(m)-1]} ${parseInt(y)+543}`; };
 
-// ── LocalStorage ──────────────────────────────────────────────────────────
-const STORE_KEY = "moto_shop_orders_v3";
-const PARTS_KEY = "moto_shop_parts_v3";
-const loadOrders = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY))||[]; } catch { return []; } };
-const saveOrders = o  => localStorage.setItem(STORE_KEY, JSON.stringify(o));
-const loadParts  = () => { try { return JSON.parse(localStorage.getItem(PARTS_KEY))||DEFAULT_PARTS; } catch { return DEFAULT_PARTS; } };
-const saveParts  = p  => localStorage.setItem(PARTS_KEY, JSON.stringify(p));
-
-// ═══════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
 export default function App() {
   const xlsxReady = useXLSX();
-  const [tab, setTab] = useState("order");
 
-  const [parts,  setParts]  = useState(loadParts);
-  const [orders, setOrders] = useState(loadOrders);
-  useEffect(()=>saveParts(parts),   [parts]);
-  useEffect(()=>saveOrders(orders), [orders]);
+  // ─── Theme ───────────────────────────────────────────────────────────────
+  const [isDark, setIsDark] = useState(()=>{
+    try { return localStorage.getItem("moto_theme")==="dark"; } catch { return false; }
+  });
+  const T = THEMES[isDark ? "dark" : "light"];
 
-  const [custType,    setCustType]    = useState("retail");
-  const [custName,    setCustName]    = useState("");
-  const [bikeBrand,   setBikeBrand]   = useState("");
-  const [search,      setSearch]      = useState("");
-  const [suggestions, setSuggestions] = useState([]);
-  const [showDrop,    setShowDrop]    = useState(false);
-  const [selPart,     setSelPart]     = useState(null);
-  const [qty,         setQty]         = useState(1);
-  const [customPrice, setCustomPrice] = useState("");
-  const [note,        setNote]        = useState("");
-  const [lines,       setLines]       = useState([]);
-  const [editLineIdx, setEditLineIdx] = useState(null);
-  const [curDate,     setCurDate]     = useState(todayStr());
+  const toggleTheme = () => {
+    setIsDark(d => {
+      const next = !d;
+      try { localStorage.setItem("moto_theme", next?"dark":"light"); } catch{}
+      return next;
+    });
+  };
+
+  // apply bg to body
+  useEffect(()=>{ document.body.style.background = T.bg; },[isDark]);
+
+  // ─── State ────────────────────────────────────────────────────────────────
+  const [tab,        setTab]        = useState("order");
+  const [loading,    setLoading]    = useState(false);
+  const [toast,      setToast]      = useState(null);
+  const [parts,      setParts]      = useState([]);
+  const [partsLoaded,setPartsLoaded]= useState(false);
+  const [orders,     setOrders]     = useState([]);
+  const [custType,   setCustType]   = useState("retail");
+  const [custName,   setCustName]   = useState("");
+  const [bike,       setBike]       = useState("");
+  const [search,     setSearch]     = useState("");
+  const [sugg,       setSugg]       = useState([]);
+  const [showDrop,   setShowDrop]   = useState(false);
+  const [selPart,    setSelPart]    = useState(null);
+  const [qty,        setQty]        = useState(1);
+  const [overPrice,  setOverPrice]  = useState("");
+  const [note,       setNote]       = useState("");
+  const [lines,      setLines]      = useState([]);
+  const [saving,     setSaving]     = useState(false);
+  const [dateStr,    setDateStr]    = useState(todayTH());
+  const [fMonth,     setFMonth]     = useState(mk(nowISO()));
+  const [fType,      setFType]      = useState("all");
+  const [pName,      setPName]      = useState("");
+  const [pR,         setPR]         = useState("");
+  const [pD,         setPD]         = useState("");
+  const [pW,         setPW]         = useState("");
+  const [pSaving,    setPSaving]    = useState(false);
   const searchRef = useRef(null);
 
-  const allMonths    = [...new Set(orders.map(o=>monthKey(o.date)))].sort().reverse();
-  const [filterMonth,setFilterMonth] = useState(()=>monthKey(nowISO()));
-  const [filterType, setFilterType]  = useState("all");
-
-  const [newName,      setNewName]      = useState("");
-  const [newRetail,    setNewRetail]    = useState("");
-  const [newDiy,       setNewDiy]       = useState("");
-  const [newWholesale, setNewWholesale] = useState("");
-
-  useEffect(()=>{ const t=setInterval(()=>setCurDate(todayStr()),60000); return()=>clearInterval(t); },[]);
-
-  const catalogPrice = (p, type) => {
-    const key = CUST_TYPES.find(c=>c.id===type)?.priceKey||"retailPrice";
-    return p[key]??p.retailPrice;
+  const showToast = (msg, ok=true) => {
+    setToast({msg,ok});
+    setTimeout(()=>setToast(null), 2800);
   };
 
-  const handleSearch = val => {
+  useEffect(()=>{ const t=setInterval(()=>setDateStr(todayTH()),60000); return()=>clearInterval(t); },[]);
+
+  // ─── Supabase: load parts ─────────────────────────────────────────────────
+  const loadParts = useCallback(async()=>{
+    const {data,error}=await sb.from("parts").select("*").order("name");
+    if(error){ showToast("โหลดอะไหล่ไม่ได้ ❌",false); return; }
+    if(data.length===0){
+      await sb.from("parts").insert(DEFAULT_PARTS.map(p=>({
+        name:p.name, retail_price:p.retailPrice,
+        diy_price:p.diyPrice, wholesale_price:p.wholesalePrice
+      })));
+      loadParts(); return;
+    }
+    setParts(data.map(r=>({id:r.id,name:r.name,retailPrice:r.retail_price,diyPrice:r.diy_price,wholesalePrice:r.wholesale_price})));
+    setPartsLoaded(true);
+  },[]);
+
+  // ─── Supabase: load orders ────────────────────────────────────────────────
+  const loadOrders = useCallback(async()=>{
+    setLoading(true);
+    const {data,error}=await sb.from("orders").select("*, order_lines(*)").order("created_at",{ascending:false});
+    setLoading(false);
+    if(error){ showToast("โหลดออเดอร์ไม่ได้ ❌",false); return; }
+    setOrders(data.map(o=>({
+      id:o.id, date:o.created_at?.slice(0,10)??nowISO(),
+      custType:o.cust_type, custName:o.cust_name, bikeBrand:o.bike_brand, total:o.total,
+      lines:(o.order_lines||[]).map(l=>({partName:l.part_name,qty:l.qty,unitPrice:l.unit_price,total:l.total,note:l.note??""}))
+    })));
+  },[]);
+
+  useEffect(()=>{ loadParts(); loadOrders(); },[]);
+
+  // ─── Autocomplete ─────────────────────────────────────────────────────────
+  const doSearch = val=>{
     setSearch(val); setSelPart(null);
-    if (!val.trim()){ setSuggestions([]); setShowDrop(false); return; }
-    const q=val.toLowerCase();
-    const hits=parts.filter(p=>p.name.toLowerCase().includes(q));
-    setSuggestions(hits); setShowDrop(hits.length>0);
+    if(!val.trim()){ setSugg([]); setShowDrop(false); return; }
+    const hits=parts.filter(p=>p.name.includes(val));
+    setSugg(hits); setShowDrop(hits.length>0);
   };
-  const pickPart = p => { setSelPart(p); setSearch(p.name); setCustomPrice(""); setSuggestions([]); setShowDrop(false); };
+  const pickPart = p=>{ setSelPart(p); setSearch(p.name); setOverPrice(""); setSugg([]); setShowDrop(false); };
 
-  const getUnitPrice = useCallback(()=>{
-    if (customPrice!==""&&!isNaN(Number(customPrice))) return Number(customPrice);
-    if (!selPart) return 0;
-    return catalogPrice(selPart, custType);
-  },[selPart,custType,customPrice]);
+  const unitPrice = useCallback(()=>{
+    if(overPrice!==""&&!isNaN(+overPrice)) return +overPrice;
+    if(!selPart) return 0;
+    return catPrice(selPart,custType);
+  },[selPart,custType,overPrice]);
 
-  const lineTotal = getUnitPrice()*qty;
+  const lineTotal = unitPrice()*qty;
+  const txTotal   = lines.reduce((s,l)=>s+l.total,0);
 
-  const addLine = () => {
-    if (!selPart) return;
-    const line = { partName:selPart.name, qty, unitPrice:getUnitPrice(), total:getUnitPrice()*qty, note };
-    if (editLineIdx!==null){ setLines(l=>l.map((x,i)=>i===editLineIdx?line:x)); setEditLineIdx(null); }
-    else setLines(l=>[...l,line]);
-    setSearch(""); setSelPart(null); setQty(1); setCustomPrice(""); setNote("");
+  // ─── Add line ─────────────────────────────────────────────────────────────
+  const addLine = ()=>{
+    if(!selPart) return;
+    const up=unitPrice();
+    setLines(l=>[...l,{partName:selPart.name,qty,unitPrice:up,total:up*qty,note}]);
+    setSearch(""); setSelPart(null); setQty(1); setOverPrice(""); setNote("");
     searchRef.current?.focus();
   };
 
-  const loadOrdersFromDB = async () => {
-  const { data, error } = await supabase
-    .from("orders")
-    .select("*, order_lines(*)")
-    .order("created_at", { ascending: false });
+  // ─── Save transaction ─────────────────────────────────────────────────────
+  const saveTransaction = async()=>{
+    if(!lines.length) return;
+    setSaving(true);
+    const {data:order,error}=await sb.from("orders")
+      .insert([{cust_type:custType,cust_name:custName||"—",bike_brand:bike||"—",total:txTotal}])
+      .select().single();
+    if(error){ showToast("บันทึกไม่สำเร็จ ❌",false); setSaving(false); return; }
+    const {error:le}=await sb.from("order_lines").insert(
+      lines.map(l=>({order_id:order.id,part_name:l.partName,qty:l.qty,unit_price:l.unitPrice,total:l.total,note:l.note}))
+    );
+    if(le){ showToast("บันทึกรายการไม่สำเร็จ ❌",false); setSaving(false); return; }
+    showToast("บันทึกสำเร็จ ✅");
+    setLines([]); setCustName(""); setBike(""); setSaving(false);
+    loadOrders();
+  };
 
-  if (error) {
-    console.error(error);
-    return;
-  }
+  // ─── Delete order ─────────────────────────────────────────────────────────
+  const deleteOrder = async id=>{
+    if(!window.confirm("ลบออเดอร์นี้?")) return;
+    const {error}=await sb.from("orders").delete().eq("id",id);
+    if(error){ showToast("ลบไม่สำเร็จ ❌",false); return; }
+    showToast("ลบแล้ว 🗑️");
+    setOrders(o=>o.filter(x=>x.id!==id));
+  };
 
-  const formatted = data.map(o => ({
-    id: o.id,
-    date: o.created_at,
-    custType: o.cust_type,
-    custName: o.cust_name,
-    bikeBrand: o.bike_brand,
-    total: o.total,
-    lines: o.order_lines.map(l => ({
-      partName: l.part_name,
-      qty: l.qty,
-      unitPrice: l.unit_price,
-      total: l.total,
-      note: l.note
-    }))
-  }));
+  // ─── Add / delete part ────────────────────────────────────────────────────
+  const addPart = async()=>{
+    if(!pName.trim()){ showToast("ใส่ชื่ออะไหล่ก่อน",false); return; }
+    setPSaving(true);
+    const {data,error}=await sb.from("parts")
+      .insert([{name:pName.trim(),retail_price:+pR||0,diy_price:+pD||0,wholesale_price:+pW||0}])
+      .select().single();
+    if(error){ showToast("เพิ่มอะไหล่ไม่ได้ ❌",false); setPSaving(false); return; }
+    setParts(p=>[...p,{id:data.id,name:data.name,retailPrice:data.retail_price,diyPrice:data.diy_price,wholesalePrice:data.wholesale_price}]);
+    setPName(""); setPR(""); setPD(""); setPW(""); setPSaving(false);
+    showToast("เพิ่มอะไหล่แล้ว ✅");
+  };
+  const deletePart = async id=>{
+    if(!window.confirm("ลบอะไหล่นี้?")) return;
+    const {error}=await sb.from("parts").delete().eq("id",id);
+    if(error){ showToast("ลบไม่ได้ ❌",false); return; }
+    setParts(p=>p.filter(x=>x.id!==id));
+    showToast("ลบแล้ว 🗑️");
+  };
 
-  setOrders(formatted);
-};
-
-  const txTotal = lines.reduce((s,l)=>s+l.total,0);
-
-  const saveTransaction = async () => {
-  if (!lines.length) return;
-
-  // 1. บันทึก order
-  const { data: order, error } = await supabase
-    .from("orders")
-    .insert([{
-      cust_type: custType,
-      cust_name: custName || "—",
-      bike_brand: bikeBrand || "—",
-      total: txTotal
-    }])
-    .select()
-    .single();
-
-  if (error) {
-    alert("บันทึกไม่สำเร็จ ❌");
-    console.error(error);
-    return;
-  }
-
-  // 2. บันทึกรายการอะไหล่
-  const lineData = lines.map(l => ({
-    order_id: order.id,
-    part_name: l.partName,
-    qty: l.qty,
-    unit_price: l.unitPrice,
-    total: l.total,
-    note: l.note
-  }));
-
-  const { error: lineError } = await supabase
-    .from("order_lines")
-    .insert(lineData);
-
-  if (lineError) {
-    alert("บันทึกสินค้าไม่สำเร็จ ❌");
-    console.error(lineError);
-    return;
-  }
-
-  alert("บันทึกสำเร็จ ✅");
-
-  setLines([]);
-  setCustName("");
-  setBikeBrand("");
-
-  // โหลดใหม่
-  loadOrdersFromDB();
-};
-
-  // ── Export Excel รายเดือน แยกชีทตามประเภทลูกค้า ───────────────
-  const exportMonth = mk => {
-    if (!window.XLSX) return;
-    const XLSX = window.XLSX;
-    const wb   = XLSX.utils.book_new();
-    const mo   = orders.filter(o=>monthKey(o.date)===mk);
-    const sheetNames = { retail:"ลูกค้าทั่วไป", diy:"ซื้อเอง-DIY", wholesale:"ร้านค้า-ส่ง" };
-    const hdrs = ["วันที่","ชื่อลูกค้า","รถ","ชื่ออะไหล่","จำนวน","ราคาต่อชิ้น","รวมต่อรายการ","หมายเหตุ","ยอดรวมออเดอร์"];
-
+  // ─── Export Excel ─────────────────────────────────────────────────────────
+  const exportMonth = ()=>{
+    if(!window.XLSX) return;
+    const XLSX=window.XLSX; const wb=XLSX.utils.book_new();
+    const mo=orders.filter(o=>mk(o.date)===fMonth);
+    const sn={retail:"ลูกค้าทั่วไป",diy:"ซื้อเอง-DIY",wholesale:"ร้านค้า-ส่ง"};
     ["retail","diy","wholesale"].forEach(t=>{
-      const rows=mo.filter(o=>o.custType===t);
-      if (!rows.length) return;
-      const data=[hdrs];
-      rows.forEach(tx=>{
-        tx.lines.forEach((ln,i)=>{
-          data.push([tx.date, tx.custName, tx.bikeBrand,
-            ln.partName, ln.qty, ln.unitPrice, ln.total, ln.note||"",
-            i===0?tx.total:""]);
-        });
-        data.push([]);
-      });
-      const gt=rows.reduce((s,r)=>s+r.total,0);
-      data.push(["","","","","","","ยอดรวมเดือน","",gt]);
+      const rows=mo.filter(o=>o.custType===t); if(!rows.length) return;
+      const data=[["วันที่","ชื่อ","รถ","อะไหล่","จำนวน","ราคา/ชิ้น","รวม","หมายเหตุ","ยอดรวม"]];
+      rows.forEach(tx=>tx.lines.forEach((ln,i)=>data.push([tx.date,tx.custName,tx.bikeBrand,ln.partName,ln.qty,ln.unitPrice,ln.total,ln.note,i===0?tx.total:""])));
+      data.push([],["","","","","","","ยอดรวมเดือน","",rows.reduce((s,r)=>s+r.total,0)]);
       const ws=XLSX.utils.aoa_to_sheet(data);
-      ws["!cols"]=[12,16,14,24,6,13,14,18,15].map(w=>({wch:w}));
-      XLSX.utils.book_append_sheet(wb,ws,sheetNames[t]);
+      ws["!cols"]=[10,14,12,20,5,10,10,16,12].map(w=>({wch:w}));
+      XLSX.utils.book_append_sheet(wb,ws,sn[t]);
     });
-
-    // ชีทสรุปรวม
-    const sumData=[["ประเภทลูกค้า","จำนวนออเดอร์","ยอดรวม (฿)"]];
-    ["retail","diy","wholesale"].forEach(t=>{
-      const rows=mo.filter(o=>o.custType===t);
-      sumData.push([sheetNames[t], rows.length, rows.reduce((s,r)=>s+r.total,0)]);
-    });
-    sumData.push([]);
-    sumData.push(["รวมทั้งหมด","",mo.reduce((s,r)=>s+r.total,0)]);
-    const wsSum=XLSX.utils.aoa_to_sheet(sumData);
-    wsSum["!cols"]=[{wch:18},{wch:14},{wch:14}];
-    XLSX.utils.book_append_sheet(wb,wsSum,"สรุปรายเดือน");
-
-    XLSX.writeFile(wb,`MotoShop_${mk}.xlsx`);
+    const sd=[["ประเภท","ออเดอร์","ยอดรวม"]];
+    ["retail","diy","wholesale"].forEach(t=>{ const r=mo.filter(o=>o.custType===t); sd.push([sn[t],r.length,r.reduce((s,x)=>s+x.total,0)]); });
+    sd.push([],["รวมทั้งหมด","",mo.reduce((s,r)=>s+r.total,0)]);
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(sd),"สรุป");
+    XLSX.writeFile(wb,`MotoShop_${fMonth}.xlsx`);
   };
 
-  useEffect(() => {
-   loadOrdersFromDB();
-}, []);
+  useEffect(()=>{
+    const h=e=>{ if(!e.target.closest(".sw")) setShowDrop(false); };
+    document.addEventListener("mousedown",h);
+    return()=>document.removeEventListener("mousedown",h);
+  },[]);
 
-  const historyRows  = orders.filter(o=>monthKey(o.date)===filterMonth&&(filterType==="all"||o.custType===filterType)).sort((a,b)=>b.id-a.id);
-  const historyTotal = historyRows.reduce((s,o)=>s+o.total,0);
+  const allMonths=[...new Set(orders.map(o=>mk(o.date)))].sort().reverse();
+  const hRows=orders.filter(o=>mk(o.date)===fMonth&&(fType==="all"||o.custType===fType));
+  const hTotal=hRows.reduce((s,o)=>s+o.total,0);
 
-  const addPart = () => {
-    if (!newName.trim()) return;
-    setParts(p=>[...p,{name:newName.trim(),retailPrice:Number(newRetail)||0,diyPrice:Number(newDiy)||0,wholesalePrice:Number(newWholesale)||0}]);
-    setNewName(""); setNewRetail(""); setNewDiy(""); setNewWholesale("");
+  // ─── Style builders (theme-aware) ─────────────────────────────────────────
+  const inp = {
+    width:"100%", padding:"11px 12px",
+    border:`1.5px solid ${T.inpBorder}`,
+    borderRadius:9, fontSize:14,
+    color:T.inpText, background:T.inp,
+    transition:"border 0.15s", fontFamily:"inherit",
   };
-  const deletePart = i => { if (confirm("ลบอะไหล่นี้ออกจากรายการ?")) setParts(p=>p.filter((_,idx)=>idx!==i)); };
+  const card = {
+    background:T.card, borderRadius:14, padding:"14px",
+    marginBottom:12, boxShadow:T.shadow,
+    border:`1px solid ${T.cardBorder}`,
+  };
+  const sel = { ...inp };
 
-  // ════════════ RENDER ════════════════════════════════════════════
+  // ════════════════════════════════════════════════════════════════
+  // RENDER
+  // ════════════════════════════════════════════════════════════════
   return (
-    <div style={S.page}>
+    <div style={{maxWidth:480,margin:"0 auto",minHeight:"100vh",background:T.bg,paddingBottom:90,fontFamily:"'Sarabun',sans-serif"}}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap');
-        *{box-sizing:border-box;} body{margin:0;}
-        input[type=number]::-webkit-inner-spin-button{opacity:0.3;}
-        .di:hover{background:rgba(255,152,0,0.15)!important;}
-        .tb:hover{opacity:1!important;}
-        .rh:hover{background:rgba(255,255,255,0.035)!important;}
-        .ib:hover{opacity:1!important;transform:scale(1.18);}
-        .ct:hover{border-color:rgba(255,255,255,0.4)!important;}
-        ::-webkit-scrollbar{width:5px;height:5px;}
-        ::-webkit-scrollbar-track{background:rgba(0,0,0,0.2);}
-        ::-webkit-scrollbar-thumb{background:#555;border-radius:3px;}
+        @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800&display=swap');
+        *{box-sizing:border-box;margin:0;padding:0;}
+        input,select,button{font-family:'Sarabun',sans-serif;}
+        input:focus{outline:none;}
+        input[type=number]::-webkit-inner-spin-button{opacity:0.4;}
+        ::-webkit-scrollbar{width:4px;}
+        ::-webkit-scrollbar-thumb{background:${isDark?"#334155":"#d1d5db"};border-radius:4px;}
+        .sw .drop-item:hover{background:${T.dropHover};}
+        .tap:active{opacity:0.7;transform:scale(0.97);}
       `}</style>
 
-      {/* HEADER */}
-      <header style={S.header}>
-        <div style={S.hInner}>
-          <div style={{display:"flex",gap:12,alignItems:"center"}}>
-            <span style={{fontSize:32}}>🏍️</span>
-            <div>
-              <div style={S.bName}>ร้านอะไหล่และซ่อมรถมอเตอร์ไซค์</div>
-              <div style={S.bSub}>ระบบบันทึกการขายและออเดอร์</div>
-            </div>
+      {/* ── Toast ── */}
+      {toast&&(
+        <div style={{
+          position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",
+          background:toast.ok?"#166534":"#991b1b",
+          color:"#fff",padding:"10px 22px",borderRadius:12,
+          fontSize:15,fontWeight:600,zIndex:999,
+          boxShadow:"0 4px 20px rgba(0,0,0,0.3)",whiteSpace:"nowrap",
+        }}>{toast.msg}</div>
+      )}
+
+      {/* ── Header ── */}
+      <div style={{
+        background:T.header,padding:"13px 16px",
+        display:"flex",justifyContent:"space-between",alignItems:"center",
+        boxShadow:T.shadow, borderBottom:`1px solid ${T.headerBorder}`,
+      }}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:28}}>🏍️</span>
+          <div>
+            <div style={{fontSize:16,fontWeight:800,color:T.text}}>ร้านอะไหล่มอเตอร์ไซค์</div>
+            <div style={{fontSize:11,color:T.textMuted,marginTop:1}}>ระบบบันทึกการขาย</div>
           </div>
-          <div style={S.datePill}>{curDate}</div>
         </div>
-        <div style={S.tabs}>
-          {[["order","📝 บันทึกออเดอร์"],["history","📊 ประวัติการขาย"],["parts","⚙️ รายการอะไหล่"]].map(([id,lbl])=>(
-            <button key={id} className="tb" style={{...S.tab,...(tab===id?S.tabOn:{})}} onClick={()=>setTab(id)}>{lbl}</button>
-          ))}
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{fontSize:12,fontWeight:600,color:T.textSub,background:isDark?"#22262f":"#f3f4f6",padding:"5px 11px",borderRadius:20}}>
+            {dateStr}
+          </div>
+          {/* Theme Toggle */}
+          <button className="tap" onClick={toggleTheme}
+            style={{
+              width:50, height:26, borderRadius:13, border:"none", cursor:"pointer",
+              background:isDark?"#3b82f6":"#d1d5db",
+              position:"relative", transition:"background 0.25s", flexShrink:0,
+              padding:0,
+            }}>
+            <div style={{
+              width:20, height:20, borderRadius:"50%", background:"#fff",
+              position:"absolute", top:3,
+              left:isDark?27:3,
+              transition:"left 0.25s",
+              display:"flex",alignItems:"center",justifyContent:"center",
+              fontSize:11,
+            }}>
+              {isDark?"🌙":"☀️"}
+            </div>
+          </button>
         </div>
-      </header>
+      </div>
 
-      <main style={S.main}>
+      {/* ── Tab bar ── */}
+      <div style={{
+        display:"flex", background:T.tabBar,
+        borderBottom:`1px solid ${T.tabBorder}`,
+        position:"sticky", top:0, zIndex:40,
+        boxShadow:T.shadowMd,
+      }}>
+        {[["order","📝","ออเดอร์"],["history","📊","ประวัติ"],["parts","⚙️","อะไหล่"]].map(([id,ic,lb])=>(
+          <button key={id} className="tap"
+            style={{
+              flex:1,display:"flex",flexDirection:"column",alignItems:"center",
+              padding:"10px 0",border:"none",background:"none",cursor:"pointer",
+              color:tab===id?T.tabActive:T.textMuted,
+              borderBottom:`2.5px solid ${tab===id?T.tabActive:"transparent"}`,
+              transition:"all 0.15s",
+            }}
+            onClick={()=>setTab(id)}>
+            <span style={{fontSize:20}}>{ic}</span>
+            <span style={{fontSize:12,marginTop:2,fontWeight:tab===id?700:400}}>{lb}</span>
+          </button>
+        ))}
+      </div>
 
-        {/* ══ บันทึกออเดอร์ ══ */}
-        {tab==="order"&&(
-          <div style={S.twoCol}>
-            <div>
-              {/* ประเภทลูกค้า */}
-              <div style={S.card}>
-                <div style={S.cTitle}>ประเภทลูกค้า</div>
-                <div style={{display:"flex",gap:10}}>
-                  {CUST_TYPES.map(ct=>(
-                    <button key={ct.id} className="ct"
-                      style={{...S.ctBtn,...(custType===ct.id?{...S.ctOn,borderColor:ct.color}:{})}}
-                      onClick={()=>{setCustType(ct.id);setCustomPrice("");}}>
-                      <div style={{fontSize:22}}>{ct.icon}</div>
-                      <div style={{fontWeight:700,color:custType===ct.id?ct.color:"#ccc",fontSize:14}}>{ct.label}</div>
-                      <div style={{fontSize:11,color:"#777",marginTop:2}}>{ct.sub}</div>
-                    </button>
+      {/* ════════ ORDER TAB ════════ */}
+      {tab==="order"&&(
+        <div style={{paddingTop:4}}>
+          <Sect title="ลูกค้าประเภทไหน?" T={T}>
+            <div style={{display:"flex",gap:8}}>
+              {CUST.map(c=>(
+                <button key={c.id} className="tap"
+                  style={{
+                    flex:1,display:"flex",flexDirection:"column",alignItems:"center",
+                    padding:"12px 4px",borderRadius:12,cursor:"pointer",
+                    border:`1.5px solid ${custType===c.id?c.color:T.ctypeBorder}`,
+                    background:custType===c.id?(isDark?`${c.color}22`:`${c.color}12`):T.ctypeBg,
+                    transition:"all 0.15s",
+                  }}
+                  onClick={()=>{setCustType(c.id);setOverPrice("");}}>
+                  <span style={{fontSize:22}}>{c.icon}</span>
+                  <span style={{fontWeight:700,fontSize:12,marginTop:4,color:custType===c.id?c.color:T.textSub,textAlign:"center"}}>{c.th}</span>
+                </button>
+              ))}
+            </div>
+          </Sect>
+
+          <Sect title="ข้อมูลลูกค้า (ถ้ามี)" T={T}>
+            <div style={{display:"flex",gap:8}}>
+              <div style={{flex:1}}>
+                <SLabel T={T}>ชื่อหรือเบอร์โทร</SLabel>
+                <input style={inp} placeholder="เช่น สมชาย / 081-xxx" value={custName} onChange={e=>setCustName(e.target.value)}/>
+              </div>
+              <div style={{flex:1}}>
+                <SLabel T={T}>ยี่ห้อ/รุ่นรถ</SLabel>
+                <input style={inp} placeholder="Honda Wave…" value={bike} onChange={e=>setBike(e.target.value)}/>
+              </div>
+            </div>
+          </Sect>
+
+          <Sect title="เลือกอะไหล่" T={T}>
+            {/* Search */}
+            <div className="sw" style={{position:"relative",marginBottom:10}}>
+              <SLabel T={T}>ชื่ออะไหล่</SLabel>
+              <input ref={searchRef} style={inp} placeholder="พิมพ์ชื่ออะไหล่…"
+                value={search} onChange={e=>doSearch(e.target.value)}
+                onFocus={()=>sugg.length>0&&setShowDrop(true)}
+                onKeyDown={e=>{if(e.key==="Enter"&&selPart)addLine();if(e.key==="Escape")setShowDrop(false);}}/>
+              {showDrop&&(
+                <div style={{
+                  position:"absolute",top:"calc(100% + 4px)",left:0,right:0,zIndex:100,
+                  background:T.dropBg,border:`1.5px solid ${T.dropBorder}`,borderRadius:12,
+                  boxShadow:T.shadowMd,maxHeight:240,overflowY:"auto",
+                }}>
+                  {sugg.map(p=>(
+                    <div key={p.id} className="drop-item"
+                      style={{padding:"11px 14px",cursor:"pointer",borderBottom:`1px solid ${T.divider}`,transition:"background 0.1s"}}
+                      onMouseDown={()=>pickPart(p)}>
+                      <div style={{fontWeight:700,fontSize:14,color:T.text}}>{p.name}</div>
+                      <div style={{display:"flex",gap:6,marginTop:5,flexWrap:"wrap"}}>
+                        {CUST.map(c=>(
+                          <span key={c.id} style={{fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,
+                            color:c.color,background:isDark?`${c.color}20`:`${c.color}12`}}>
+                            {c.th}: {fmt(catPrice(p,c.id))}฿
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Price hint */}
+            {selPart&&(
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                background:T.hintBg,borderRadius:10,padding:"10px 14px",marginBottom:10}}>
+                <span style={{fontSize:13,color:T.textSub}}>
+                  ราคา{CUST.find(c=>c.id===custType)?.th}:
+                </span>
+                <span style={{fontSize:22,fontWeight:800,color:CUST.find(c=>c.id===custType)?.color}}>
+                  {fmt(catPrice(selPart,custType))} ฿
+                </span>
+              </div>
+            )}
+
+            {/* Qty + override + note */}
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              <div style={{flex:"0 0 auto"}}>
+                <SLabel T={T}>จำนวน</SLabel>
+                <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                  <QBtn onClick={()=>setQty(q=>Math.max(1,q-1))} T={T}>−</QBtn>
+                  <input style={{...inp,width:52,textAlign:"center"}} type="number" min="1"
+                    value={qty} onChange={e=>setQty(Math.max(1,parseInt(e.target.value)||1))}/>
+                  <QBtn onClick={()=>setQty(q=>q+1)} T={T}>+</QBtn>
+                </div>
+              </div>
+              <div style={{flex:1,minWidth:100}}>
+                <SLabel T={T}>ราคาพิเศษ (ถ้ามี)</SLabel>
+                <input style={inp} type="number" min="0"
+                  placeholder={selPart?String(catPrice(selPart,custType)):"—"}
+                  value={overPrice} onChange={e=>setOverPrice(e.target.value)}/>
+              </div>
+              <div style={{flex:2,minWidth:130}}>
+                <SLabel T={T}>หมายเหตุ</SLabel>
+                <input style={inp} placeholder="อะไหล่แท้ / ลูกค้านำมาเอง…" value={note} onChange={e=>setNote(e.target.value)}/>
+              </div>
+            </div>
+
+            {selPart&&(
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                background:T.previewBg,borderRadius:10,padding:"12px 14px",marginTop:10}}>
+                <span style={{color:T.textSub,fontSize:14}}>{selPart.name} × {qty}</span>
+                <span style={{fontWeight:800,fontSize:22,color:T.tabActive}}>{fmt(lineTotal)} ฿</span>
+              </div>
+            )}
+
+            <button className="tap"
+              style={{width:"100%",marginTop:10,padding:"14px",borderRadius:11,border:"none",
+                background:selPart?"#3b82f6":"#94a3b8",color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",
+                opacity:selPart?1:0.6,transition:"background 0.2s"}}
+              disabled={!selPart} onClick={addLine}>
+              ➕ เพิ่มรายการ
+            </button>
+          </Sect>
+
+          {/* Order lines */}
+          <Sect title={`รายการในออเดอร์ (${lines.length} รายการ)`} T={T}>
+            {lines.length===0?(
+              <div style={{textAlign:"center",color:T.textMuted,padding:"28px 16px",fontSize:14,lineHeight:"1.7"}}>
+                ยังไม่มีรายการ<br/>เลือกอะไหล่ด้านบนได้เลย
+              </div>
+            ):(
+              <>
+                {lines.map((ln,i)=>(
+                  <div key={i} style={{display:"flex",alignItems:"center",gap:10,
+                    padding:"12px 0",borderBottom:`1px solid ${T.lineDivider}`}}>
+                    <div style={{flex:1}}>
+                      <div style={{fontWeight:700,fontSize:15,color:T.text}}>{ln.partName}</div>
+                      <div style={{color:T.textSub,fontSize:13,marginTop:2}}>
+                        {ln.qty} ชิ้น × {fmt(ln.unitPrice)}฿
+                        {ln.note&&<span style={{marginLeft:6,color:T.textMuted}}>({ln.note})</span>}
+                      </div>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{fontWeight:700,fontSize:16,color:T.tabActive}}>{fmt(ln.total)}฿</span>
+                      <button style={{background:"none",border:`1.5px solid ${T.delBorder}`,
+                        color:T.delColor,borderRadius:8,padding:"5px 10px",fontSize:13,fontWeight:600,cursor:"pointer"}}
+                        onClick={()=>setLines(l=>l.filter((_,idx)=>idx!==i))}>✕</button>
+                    </div>
+                  </div>
+                ))}
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                  background:isDark?"#22262f":"#f8fafc",borderRadius:10,padding:"14px",marginTop:10}}>
+                  <span style={{fontSize:15,color:T.textSub,fontWeight:600}}>ยอดรวม</span>
+                  <span style={{fontSize:26,fontWeight:800,color:T.text}}>{fmt(txTotal)} ฿</span>
+                </div>
+                <button className="tap"
+                  style={{width:"100%",marginTop:10,padding:"15px",borderRadius:11,border:"none",
+                    background:T.saveBg,color:T.saveColor,fontSize:16,fontWeight:700,cursor:"pointer",
+                    opacity:saving?0.6:1}}
+                  disabled={saving} onClick={saveTransaction}>
+                  {saving?"⏳ กำลังบันทึก…":"💾 บันทึกออเดอร์"}
+                </button>
+              </>
+            )}
+          </Sect>
+        </div>
+      )}
+
+      {/* ════════ HISTORY TAB ════════ */}
+      {tab==="history"&&(
+        <div style={{paddingTop:4}}>
+          <Sect title="กรองข้อมูล" T={T}>
+            <div style={{display:"flex",gap:8,marginBottom:10}}>
+              <div style={{flex:1}}>
+                <SLabel T={T}>เดือน</SLabel>
+                <select style={sel} value={fMonth} onChange={e=>setFMonth(e.target.value)}>
+                  {(allMonths.length?allMonths:[mk(nowISO())]).map(m=>(
+                    <option key={m} value={m}>{mlabel(m)}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{flex:1}}>
+                <SLabel T={T}>ประเภทลูกค้า</SLabel>
+                <select style={sel} value={fType} onChange={e=>setFType(e.target.value)}>
+                  <option value="all">ทุกประเภท</option>
+                  {CUST.map(c=><option key={c.id} value={c.id}>{c.th}</option>)}
+                </select>
+              </div>
+            </div>
+            <button className="tap"
+              style={{width:"100%",padding:"13px",borderRadius:11,border:"none",
+                background:"#16a34a",color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",
+                opacity:xlsxReady&&hRows.length?1:0.4}}
+              disabled={!xlsxReady||!hRows.length} onClick={exportMonth}>
+              📥 ดาวน์โหลด Excel — {mlabel(fMonth)}
+            </button>
+          </Sect>
+
+          {/* Summary chips */}
+          <div style={{display:"flex",gap:8,padding:"0 14px 10px",flexWrap:"wrap"}}>
+            {CUST.map(c=>{
+              const r=hRows.filter(o=>o.custType===c.id);
+              return (
+                <div key={c.id} style={{
+                  flex:1,minWidth:90,background:T.card,borderRadius:10,
+                  padding:"10px 12px",borderLeft:`3px solid ${c.color}`,
+                  boxShadow:T.shadow,
+                }}>
+                  <div style={{fontSize:11,color:T.textSub,fontWeight:600}}>{c.icon} {c.th}</div>
+                  <div style={{fontSize:15,fontWeight:700,color:T.text,marginTop:3}}>{fmt(r.reduce((s,x)=>s+x.total,0))} ฿</div>
+                  <div style={{fontSize:11,color:T.textMuted}}>{r.length} ออเดอร์</div>
+                </div>
+              );
+            })}
+          </div>
+
+          {loading&&<div style={{textAlign:"center",color:T.textMuted,padding:32}}>⏳ กำลังโหลด…</div>}
+          {!loading&&hRows.length===0&&<div style={{textAlign:"center",color:T.textMuted,padding:32}}>ไม่มีข้อมูลในเดือนนี้</div>}
+
+          {hRows.map(tx=>{
+            const ct=CUST.find(c=>c.id===tx.custType);
+            return (
+              <div key={tx.id} style={{...card,margin:"0 14px 10px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                  <span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20,
+                    color:ct?.color,background:isDark?`${ct?.color}22`:`${ct?.color}12`}}>
+                    {ct?.icon} {ct?.th}
+                  </span>
+                  <span style={{fontWeight:700,color:T.text}}>{tx.custName}</span>
+                  <span style={{color:T.textMuted,fontSize:13}}>🏍️ {tx.bikeBrand}</span>
+                  <span style={{color:T.textMuted,fontSize:12,marginLeft:"auto"}}>{tx.date}</span>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginTop:8}}>
+                  <span style={{fontSize:20,fontWeight:800,color:T.text}}>{fmt(tx.total)} ฿</span>
+                  <button style={{background:"none",border:`1.5px solid ${T.delBorder}`,
+                    color:T.delColor,borderRadius:8,padding:"5px 12px",fontSize:13,fontWeight:600,cursor:"pointer"}}
+                    onClick={()=>deleteOrder(tx.id)}>🗑️ ลบ</button>
+                </div>
+                <div style={{marginTop:8,background:isDark?"#12151c":"#f9fafb",borderRadius:8,overflow:"hidden"}}>
+                  {tx.lines.map((ln,i)=>(
+                    <div key={i} style={{display:"flex",justifyContent:"space-between",
+                      padding:"8px 10px",borderBottom:i<tx.lines.length-1?`1px solid ${T.divider}`:"none"}}>
+                      <span style={{fontSize:13,color:T.textSub}}>{ln.partName} × {ln.qty}</span>
+                      <span style={{fontSize:13,fontWeight:600,color:T.text}}>{fmt(ln.total)}฿</span>
+                    </div>
                   ))}
                 </div>
               </div>
+            );
+          })}
 
-              {/* ข้อมูลลูกค้า */}
-              <div style={S.card}>
-                <div style={S.cTitle}>ข้อมูลลูกค้า</div>
-                <div style={S.row2}>
-                  <div style={{flex:1}}>
-                    <label style={S.lbl}>ชื่อลูกค้า <Opt/></label>
-                    <input style={S.inp} placeholder="ชื่อหรือเบอร์โทร…" value={custName} onChange={e=>setCustName(e.target.value)}/>
-                  </div>
-                  <div style={{flex:1}}>
-                    <label style={S.lbl}>ยี่ห้อ/รุ่นรถ <Opt/></label>
-                    <input style={S.inp} placeholder="เช่น Honda Wave, Yamaha…" value={bikeBrand} onChange={e=>setBikeBrand(e.target.value)}/>
-                  </div>
-                </div>
-              </div>
-
-              {/* เพิ่มอะไหล่ */}
-              <div style={S.card}>
-                <div style={S.cTitle}>{editLineIdx!==null?"✏️ แก้ไขรายการ":"➕ เพิ่มอะไหล่"}</div>
-                <div className="srch-wrap" style={{position:"relative",marginBottom:12}}>
-                  <label style={S.lbl}>ชื่ออะไหล่</label>
-                  <input ref={searchRef} style={S.inp} placeholder="พิมพ์ชื่ออะไหล่…"
-                    value={search} onChange={e=>handleSearch(e.target.value)}
-                    onFocus={()=>suggestions.length>0&&setShowDrop(true)}
-                    onKeyDown={e=>{if(e.key==="Enter"&&selPart)addLine();if(e.key==="Escape")setShowDrop(false);}}/>
-                  {showDrop&&(
-                    <div style={S.drop}>
-                      {suggestions.map(p=>(
-                        <div key={p.name} className="di" style={S.dropItem} onMouseDown={()=>pickPart(p)}>
-                          <span style={{fontWeight:700}}>{p.name}</span>
-                          <div style={{display:"flex",gap:6,marginTop:4,flexWrap:"wrap"}}>
-                            <span style={{...S.chip,color:"#4fc3f7"}}>ทั่วไป: {fmtN(p.retailPrice)}฿</span>
-                            <span style={{...S.chip,color:"#81c784"}}>DIY: {fmtN(p.diyPrice)}฿</span>
-                            <span style={{...S.chip,color:"#ffb74d"}}>ส่ง: {fmtN(p.wholesalePrice)}฿</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {selPart&&(
-                  <div style={S.priceHint}>
-                    <span>📌 ราคา{CUST_TYPES.find(c=>c.id===custType)?.label}: </span>
-                    <strong style={{color:"#ff9800"}}>{fmtN(catalogPrice(selPart,custType))}฿</strong>
-                    {custType!=="retail"&&selPart.retailPrice>0&&(
-                      <span style={{color:"#aaa",fontSize:11,marginLeft:8}}>
-                        (ลด {Math.round((1-catalogPrice(selPart,custType)/selPart.retailPrice)*100)}% จากราคาปกติ)
-                      </span>
-                    )}
-                  </div>
-                )}
-
-                <div style={{...S.row2,marginTop:12,flexWrap:"wrap"}}>
-                  <div>
-                    <label style={S.lbl}>จำนวน</label>
-                    <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                      <button style={S.qb} onClick={()=>setQty(q=>Math.max(1,q-1))}>−</button>
-                      <input style={{...S.inp,textAlign:"center",width:60,flexShrink:0}} type="number" min="1" value={qty}
-                        onChange={e=>setQty(Math.max(1,parseInt(e.target.value)||1))}/>
-                      <button style={S.qb} onClick={()=>setQty(q=>q+1)}>+</button>
-                    </div>
-                  </div>
-                  <div style={{flex:1}}>
-                    <label style={S.lbl}>ราคาพิเศษ <Opt/></label>
-                    <input style={S.inp} type="number" min="0"
-                      placeholder={selPart?String(catalogPrice(selPart,custType)):"—"}
-                      value={customPrice} onChange={e=>setCustomPrice(e.target.value)}/>
-                  </div>
-                  <div style={{flex:1}}>
-                    <label style={S.lbl}>หมายเหตุ <Opt/></label>
-                    <input style={S.inp} placeholder="เช่น อะไหล่แท้ / ลูกค้านำมาเอง…"
-                      value={note} onChange={e=>setNote(e.target.value)}/>
-                  </div>
-                </div>
-
-                {selPart&&(
-                  <div style={S.preview}>
-                    <span style={{color:"#ccc"}}>{selPart.name} × {qty}</span>
-                    <span style={{fontWeight:800,fontSize:20,color:"#ff9800"}}>{fmtN(lineTotal)} ฿</span>
-                  </div>
-                )}
-
-                <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:12}}>
-                  {editLineIdx!==null&&(
-                    <button style={S.btnSec} onClick={()=>{setEditLineIdx(null);setSearch("");setSelPart(null);setQty(1);setCustomPrice("");setNote("");}}>ยกเลิก</button>
-                  )}
-                  <button style={{...S.btnOrange,opacity:selPart?1:0.4}} disabled={!selPart} onClick={addLine}>
-                    {editLineIdx!==null?"อัปเดตรายการ":"เพิ่มรายการ"}
-                  </button>
-                </div>
-              </div>
+          {hRows.length>0&&(
+            <div style={{...card,margin:"0 14px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontSize:14,color:T.textSub}}>{mlabel(fMonth)} · {hRows.length} ออเดอร์</span>
+              <span style={{fontSize:22,fontWeight:800,color:T.text}}>{fmt(hTotal)} ฿</span>
             </div>
+          )}
+        </div>
+      )}
 
-            {/* ขวา: รายการออเดอร์ */}
-            <div>
-              <div style={{...S.card,position:"sticky",top:16}}>
-                <div style={S.cTitle}>
-                  🧾 รายการในออเดอร์
-                  <span style={{marginLeft:6,...badge(custType)}}>{CUST_TYPES.find(c=>c.id===custType)?.label}</span>
-                </div>
-
-                {lines.length===0?(
-                  <div style={S.empty}>ยังไม่มีรายการ</div>
-                ):(
-                  <div style={{overflowX:"auto"}}>
-                    <table style={S.tbl}>
-                      <thead><tr>{["อะไหล่","จำนวน","ราคา/ชิ้น","รวม","หมายเหตุ",""].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
-                      <tbody>
-                        {lines.map((ln,i)=>(
-                          <tr key={i} className="rh" style={{...S.tr,...(editLineIdx===i?{background:"rgba(255,152,0,0.07)"}:{})}}>
-                            <td style={S.td}>{ln.partName}</td>
-                            <td style={{...S.td,textAlign:"center"}}>{ln.qty}</td>
-                            <td style={{...S.td,textAlign:"right"}}>{fmtN(ln.unitPrice)}฿</td>
-                            <td style={{...S.td,textAlign:"right",fontWeight:700,color:"#ff9800"}}>{fmtN(ln.total)}฿</td>
-                            <td style={{...S.td,color:"#888",fontSize:12}}>{ln.note||""}</td>
-                            <td style={{...S.td,whiteSpace:"nowrap"}}>
-                              <button className="ib" style={S.ib} onClick={()=>{
-                                setEditLineIdx(i);
-                                const p=parts.find(x=>x.name===ln.partName);
-                                setSelPart(p||null); setSearch(ln.partName); setQty(ln.qty); setNote(ln.note||"");
-                                const cat=p?catalogPrice(p,custType):0;
-                                setCustomPrice(ln.unitPrice!==cat?String(ln.unitPrice):"");
-                              }}>✏️</button>
-                              <button className="ib" style={S.ib} onClick={()=>setLines(l=>l.filter((_,idx)=>idx!==i))}>🗑️</button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
-                <div style={S.totalBar}>
-                  <span>ยอดรวมออเดอร์นี้</span>
-                  <span style={{fontWeight:900,fontSize:22,color:"#ff9800"}}>{fmtN(txTotal)} ฿</span>
-                </div>
-                <button style={{...S.btnSave,opacity:lines.length?1:0.4,width:"100%"}} disabled={!lines.length} onClick={saveTransaction}>
-                  💾 บันทึกออเดอร์
-                </button>
-              </div>
+      {/* ════════ PARTS TAB ════════ */}
+      {tab==="parts"&&(
+        <div style={{paddingTop:4}}>
+          <Sect title="เพิ่มอะไหล่ใหม่" T={T}>
+            <div style={{marginBottom:10}}>
+              <SLabel T={T}>ชื่ออะไหล่</SLabel>
+              <input style={inp} placeholder="เช่น ลูกสูบ, ชุดคลัทช์…"
+                value={pName} onChange={e=>setPName(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&addPart()}/>
             </div>
-          </div>
-        )}
-
-        {/* ══ ประวัติการขาย ══ */}
-        {tab==="history"&&(
-          <div>
-            <div style={S.card}>
-              <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end",marginBottom:18}}>
-                <div>
-                  <label style={S.lbl}>เดือน</label>
-                  <select style={S.sel} value={filterMonth} onChange={e=>setFilterMonth(e.target.value)}>
-                    {allMonths.length===0&&<option value={monthKey(nowISO())}>{monthLabel(monthKey(nowISO()))}</option>}
-                    {allMonths.map(mk=><option key={mk} value={mk}>{monthLabel(mk)}</option>)}
-                  </select>
+            <div style={{display:"flex",gap:8,marginBottom:12}}>
+              {[
+                {label:"ราคาทั่วไป",color:"#3b82f6",val:pR,set:setPR},
+                {label:"ราคา DIY",  color:"#22c55e",val:pD,set:setPD},
+                {label:"ราคาส่ง",   color:"#f97316",val:pW,set:setPW},
+              ].map(f=>(
+                <div key={f.label} style={{flex:1}}>
+                  <div style={{fontSize:11,fontWeight:700,color:f.color,marginBottom:4}}>{f.label} ฿</div>
+                  <input style={{...inp,borderTop:`2.5px solid ${f.color}`}} type="number" min="0"
+                    placeholder="0" value={f.val} onChange={e=>f.set(e.target.value)}/>
                 </div>
-                <div>
-                  <label style={S.lbl}>ประเภทลูกค้า</label>
-                  <select style={S.sel} value={filterType} onChange={e=>setFilterType(e.target.value)}>
-                    <option value="all">ทั้งหมด</option>
-                    {CUST_TYPES.map(ct=><option key={ct.id} value={ct.id}>{ct.label}</option>)}
-                  </select>
-                </div>
-                <button style={{...S.btnGreen,marginLeft:"auto",opacity:xlsxReady&&historyRows.length?1:0.4}}
-                  disabled={!xlsxReady||!historyRows.length}
-                  onClick={()=>exportMonth(filterMonth)}>
-                  📥 Export {monthLabel(filterMonth)} → Excel
-                </button>
-              </div>
-
-              {/* สรุปยอดต่อประเภท */}
-              <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}}>
-                {CUST_TYPES.map(ct=>{
-                  const rows=historyRows.filter(o=>o.custType===ct.id);
-                  return (
-                    <div key={ct.id} style={{...S.summChip,borderColor:ct.color}}>
-                      <span style={{color:ct.color,fontWeight:700}}>{ct.icon} {ct.label}</span>
-                      <span style={{color:"#aaa",marginLeft:8}}>{rows.length} ออเดอร์ · {fmtN(rows.reduce((s,r)=>s+r.total,0))}฿</span>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {historyRows.length===0?(
-                <div style={S.empty}>ไม่มีข้อมูลในช่วงเวลานี้</div>
-              ):(
-                <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                  {historyRows.map(tx=>{
-                    const ct=CUST_TYPES.find(c=>c.id===tx.custType);
-                    return (
-                      <div key={tx.id} style={S.txCard}>
-                        <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-                          <span style={badge(tx.custType)}>{ct?.icon} {ct?.label}</span>
-                          <span style={{fontWeight:700}}>{tx.custName}</span>
-                          <span style={{color:"#888",fontSize:13}}>🏍️ {tx.bikeBrand}</span>
-                          <span style={{color:"#777",fontSize:12,marginLeft:"auto"}}>{tx.date}</span>
-                        </div>
-                        <div style={{display:"flex",gap:8,marginTop:6,alignItems:"center"}}>
-                          <span style={{fontWeight:800,fontSize:17,color:"#ff9800"}}>{fmtN(tx.total)} ฿</span>
-                          <button style={{...S.btnDanger,padding:"3px 10px",fontSize:12}}
-                            onClick={()=>{if(confirm("ลบออเดอร์นี้?"))setOrders(o=>o.filter(x=>x.id!==tx.id));}}>ลบ</button>
-                        </div>
-                        <table style={{...S.tbl,marginTop:8}}>
-                          <thead><tr>{["ชื่ออะไหล่","จำนวน","ราคา/ชิ้น","รวม","หมายเหตุ"].map(h=><th key={h} style={{...S.th,fontSize:11}}>{h}</th>)}</tr></thead>
-                          <tbody>
-                            {tx.lines.map((ln,i)=>(
-                              <tr key={i} style={S.tr}>
-                                <td style={S.td}>{ln.partName}</td>
-                                <td style={{...S.td,textAlign:"center"}}>{ln.qty}</td>
-                                <td style={{...S.td,textAlign:"right"}}>{fmtN(ln.unitPrice)}฿</td>
-                                <td style={{...S.td,textAlign:"right",fontWeight:700,color:"#ff9800"}}>{fmtN(ln.total)}฿</td>
-                                <td style={{...S.td,color:"#888",fontSize:12}}>{ln.note||""}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {historyRows.length>0&&(
-                <div style={{...S.totalBar,marginTop:18}}>
-                  <span>{monthLabel(filterMonth)} · {filterType==="all"?"ทุกประเภท":CUST_TYPES.find(c=>c.id===filterType)?.label} · {historyRows.length} ออเดอร์</span>
-                  <span style={{fontWeight:900,fontSize:20,color:"#ff9800"}}>{fmtN(historyTotal)} ฿</span>
-                </div>
-              )}
+              ))}
             </div>
-          </div>
-        )}
+            <button className="tap"
+              style={{width:"100%",padding:"13px",borderRadius:11,border:"none",
+                background:"#3b82f6",color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",
+                opacity:pSaving?0.6:1}}
+              disabled={pSaving} onClick={addPart}>
+              {pSaving?"กำลังบันทึก…":"☁️ บันทึกอะไหล่ขึ้น Cloud"}
+            </button>
+          </Sect>
 
-        {/* ══ รายการอะไหล่ ══ */}
-        {tab==="parts"&&(
-          <div>
-            <div style={S.card}>
-              <div style={S.cTitle}>เพิ่มอะไหล่ใหม่</div>
-              <div style={{...S.row2,flexWrap:"wrap",gap:10}}>
-                <div style={{flex:"2 1 150px"}}>
-                  <label style={S.lbl}>ชื่ออะไหล่</label>
-                  <input style={S.inp} placeholder="เช่น ลูกสูบ, ชุดคลัทช์…" value={newName}
-                    onChange={e=>setNewName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addPart()}/>
-                </div>
-                <div style={{flex:"1 1 90px"}}>
-                  <label style={S.lbl}>ราคาทั่วไป (฿)</label>
-                  <input style={S.inp} type="number" min="0" placeholder="0" value={newRetail} onChange={e=>setNewRetail(e.target.value)}/>
-                </div>
-                <div style={{flex:"1 1 90px"}}>
-                  <label style={S.lbl}>ราคา DIY (฿)</label>
-                  <input style={S.inp} type="number" min="0" placeholder="0" value={newDiy} onChange={e=>setNewDiy(e.target.value)}/>
-                </div>
-                <div style={{flex:"1 1 90px"}}>
-                  <label style={S.lbl}>ราคาส่ง (฿)</label>
-                  <input style={S.inp} type="number" min="0" placeholder="0" value={newWholesale} onChange={e=>setNewWholesale(e.target.value)}/>
-                </div>
-                <div style={{display:"flex",alignItems:"flex-end"}}>
-                  <button style={S.btnOrange} onClick={addPart}>เพิ่ม</button>
+          <Sect title={`รายการอะไหล่ทั้งหมด (${parts.length} รายการ)`} T={T}>
+            {/* Header row */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 58px 58px 58px 32px",
+              gap:4,paddingBottom:8,borderBottom:`1px solid ${T.divider}`,marginBottom:4}}>
+              {[
+                {lbl:"ชื่ออะไหล่", c:T.textMuted, r:false},
+                {lbl:"ทั่วไป",     c:"#3b82f6",   r:true},
+                {lbl:"DIY",        c:"#22c55e",   r:true},
+                {lbl:"ส่ง",        c:"#f97316",   r:true},
+                {lbl:"",           c:"",           r:true},
+              ].map((h,i)=>(
+                <div key={i} style={{fontSize:11,fontWeight:700,color:h.c,textAlign:h.r?"right":"left"}}>{h.lbl}</div>
+              ))}
+            </div>
+            {!partsLoaded&&<div style={{textAlign:"center",color:T.textMuted,padding:24}}>⏳ กำลังโหลด…</div>}
+            {parts.map(p=>(
+              <div key={p.id} style={{display:"grid",gridTemplateColumns:"1fr 58px 58px 58px 32px",
+                gap:4,padding:"9px 0",borderBottom:`1px solid ${T.divider}`,alignItems:"center"}}>
+                <div style={{fontWeight:600,fontSize:14,color:T.text}}>{p.name}</div>
+                <div style={{textAlign:"right",fontSize:13,color:"#3b82f6",fontWeight:600}}>{fmt(p.retailPrice)}</div>
+                <div style={{textAlign:"right",fontSize:13,color:"#22c55e",fontWeight:600}}>{fmt(p.diyPrice)}</div>
+                <div style={{textAlign:"right",fontSize:13,color:"#f97316",fontWeight:600}}>{fmt(p.wholesalePrice)}</div>
+                <div style={{textAlign:"right"}}>
+                  <button style={{background:"none",border:"none",color:T.delColor,cursor:"pointer",fontSize:16,padding:"2px"}}
+                    onClick={()=>deletePart(p.id)}>✕</button>
                 </div>
               </div>
-            </div>
-
-            <div style={S.card}>
-              <div style={S.cTitle}>รายการอะไหล่ทั้งหมด ({parts.length} รายการ)</div>
-              <div style={{overflowX:"auto"}}>
-                <table style={S.tbl}>
-                  <thead>
-                    <tr>
-                      {[
-                        {lbl:"#",           color:"#888"},
-                        {lbl:"ชื่ออะไหล่",  color:"#e8e4dc"},
-                        {lbl:"ราคาทั่วไป",  color:"#4fc3f7"},
-                        {lbl:"ราคา DIY",    color:"#81c784"},
-                        {lbl:"ราคาส่ง",     color:"#ffb74d"},
-                        {lbl:"ส่วนลด DIY",  color:"#81c784"},
-                        {lbl:"ส่วนลดส่ง",   color:"#ffb74d"},
-                        {lbl:"",            color:"#888"},
-                      ].map((h,i)=><th key={i} style={{...S.th,color:h.color}}>{h.lbl}</th>)}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {parts.map((p,i)=>(
-                      <tr key={i} className="rh" style={S.tr}>
-                        <td style={{...S.td,color:"#555",width:34}}>{i+1}</td>
-                        <td style={{...S.td,fontWeight:600}}>{p.name}</td>
-                        <td style={{...S.td,textAlign:"right",color:"#4fc3f7"}}>{fmtN(p.retailPrice)} ฿</td>
-                        <td style={{...S.td,textAlign:"right",color:"#81c784"}}>{fmtN(p.diyPrice)} ฿</td>
-                        <td style={{...S.td,textAlign:"right",color:"#ffb74d"}}>{fmtN(p.wholesalePrice)} ฿</td>
-                        <td style={{...S.td,textAlign:"right",color:"#81c784",fontSize:12}}>
-                          {p.retailPrice>0?`-${Math.round((1-p.diyPrice/p.retailPrice)*100)}%`:"—"}
-                        </td>
-                        <td style={{...S.td,textAlign:"right",color:"#ffb74d",fontSize:12}}>
-                          {p.retailPrice>0?`-${Math.round((1-p.wholesalePrice/p.retailPrice)*100)}%`:"—"}
-                        </td>
-                        <td style={S.td}>
-                          <button className="ib" style={S.ib} onClick={()=>deletePart(i)}>🗑️</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-      </main>
+            ))}
+          </Sect>
+        </div>
+      )}
     </div>
   );
 }
 
-const Opt = () => <span style={{color:"#555",fontStyle:"italic",fontSize:10,marginLeft:3}}>(ไม่บังคับ)</span>;
-
-const badge = type => {
-  const c={retail:"#4fc3f7",diy:"#81c784",wholesale:"#ffb74d"}[type]||"#aaa";
-  return { background:`${c}18`, border:`1px solid ${c}44`, color:c, borderRadius:6, padding:"3px 10px", fontSize:12, fontWeight:700 };
-};
-
-const S = {
-  page:     { minHeight:"100vh", background:"#111418", fontFamily:"'Sarabun',sans-serif", color:"#e8e4dc", fontSize:14 },
-  header:   { background:"#1a1d22", borderBottom:"2px solid #ff9800" },
-  hInner:   { maxWidth:1120, margin:"0 auto", padding:"14px 20px", display:"flex", justifyContent:"space-between", alignItems:"center" },
-  bName:    { fontSize:20, fontWeight:700, color:"#ff9800" },
-  bSub:     { fontSize:12, color:"#888", marginTop:2 },
-  datePill: { background:"rgba(255,152,0,0.12)", border:"1px solid rgba(255,152,0,0.4)", borderRadius:20, padding:"6px 16px", fontWeight:700, color:"#ff9800" },
-  tabs:     { maxWidth:1120, margin:"0 auto", display:"flex", padding:"0 20px" },
-  tab:      { padding:"10px 20px", border:"none", background:"none", color:"#888", fontWeight:600, fontSize:13, cursor:"pointer", borderBottom:"3px solid transparent", transition:"all 0.2s", fontFamily:"'Sarabun',sans-serif", opacity:0.7 },
-  tabOn:    { color:"#ff9800", borderBottom:"3px solid #ff9800", opacity:1 },
-  main:     { maxWidth:1120, margin:"0 auto", padding:"22px 20px" },
-  twoCol:   { display:"grid", gridTemplateColumns:"1fr 370px", gap:18, alignItems:"start" },
-  card:     { background:"#1a1d22", border:"1px solid #2a2d32", borderRadius:12, padding:"18px 20px", marginBottom:14 },
-  cTitle:   { fontSize:15, fontWeight:700, color:"#ff9800", marginBottom:14, display:"flex", alignItems:"center", gap:8 },
-  ctBtn:    { flex:1, padding:"12px 8px", borderRadius:10, border:"1px solid #333", background:"#111418", cursor:"pointer", textAlign:"center", transition:"all 0.18s", color:"#ccc", fontFamily:"'Sarabun',sans-serif" },
-  ctOn:     { background:"rgba(255,152,0,0.08)" },
-  lbl:      { display:"block", fontSize:11, color:"#888", marginBottom:4 },
-  inp:      { width:"100%", background:"#0e1014", border:"1px solid #2e3138", borderRadius:7, color:"#e8e4dc", padding:"9px 11px", fontSize:13, outline:"none" },
-  row2:     { display:"flex", gap:12, alignItems:"flex-start" },
-  drop:     { position:"absolute", top:"100%", left:0, right:0, zIndex:200, background:"#1e222a", border:"1px solid #ff9800", borderRadius:10, boxShadow:"0 8px 28px rgba(0,0,0,0.6)", maxHeight:260, overflowY:"auto" },
-  dropItem: { padding:"10px 14px", cursor:"pointer", borderBottom:"1px solid #2a2d32" },
-  chip:     { background:"rgba(255,255,255,0.07)", borderRadius:5, padding:"2px 7px", fontSize:11, fontWeight:700 },
-  priceHint:{ background:"rgba(255,152,0,0.08)", border:"1px solid rgba(255,152,0,0.2)", borderRadius:7, padding:"8px 12px", fontSize:13, color:"#ccc" },
-  qb:       { width:34, height:36, borderRadius:7, border:"1px solid #333", background:"#222", color:"#e8e4dc", fontSize:18, cursor:"pointer", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center" },
-  preview:  { background:"rgba(255,152,0,0.08)", border:"1px solid rgba(255,152,0,0.2)", borderRadius:8, padding:"10px 14px", display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:12 },
-  btnOrange:{ background:"linear-gradient(135deg,#ff9800,#e65100)", border:"none", borderRadius:8, color:"#fff", fontWeight:700, fontSize:13, padding:"10px 18px", cursor:"pointer", fontFamily:"'Sarabun',sans-serif", whiteSpace:"nowrap" },
-  btnSec:   { background:"rgba(255,255,255,0.07)", border:"1px solid #333", borderRadius:8, color:"#aaa", fontWeight:600, fontSize:13, padding:"10px 14px", cursor:"pointer" },
-  btnSave:  { background:"linear-gradient(135deg,#1976d2,#0d47a1)", border:"none", borderRadius:9, color:"#fff", fontWeight:700, fontSize:14, padding:"13px 0", cursor:"pointer", marginTop:14, fontFamily:"'Sarabun',sans-serif" },
-  btnGreen: { background:"linear-gradient(135deg,#43a047,#1b5e20)", border:"none", borderRadius:8, color:"#fff", fontWeight:700, fontSize:13, padding:"10px 16px", cursor:"pointer" },
-  btnDanger:{ background:"rgba(198,40,40,0.15)", border:"1px solid rgba(198,40,40,0.4)", borderRadius:7, color:"#ef5350", fontWeight:600, fontSize:13, padding:"7px 12px", cursor:"pointer" },
-  tbl:      { width:"100%", borderCollapse:"collapse" },
-  th:       { background:"rgba(255,152,0,0.08)", padding:"8px 10px", textAlign:"left", color:"#ff9800", fontWeight:700, fontSize:11, borderBottom:"1px solid rgba(255,152,0,0.2)" },
-  tr:       { borderBottom:"1px solid #1f2228" },
-  td:       { padding:"9px 10px", verticalAlign:"middle" },
-  ib:       { background:"none", border:"none", cursor:"pointer", fontSize:14, padding:"2px 4px", opacity:0.6, transition:"opacity 0.15s,transform 0.15s" },
-  totalBar: { display:"flex", justifyContent:"space-between", alignItems:"center", background:"rgba(255,152,0,0.06)", border:"1px solid rgba(255,152,0,0.2)", borderRadius:9, padding:"12px 16px", marginTop:12, fontWeight:600 },
-  empty:    { color:"#555", textAlign:"center", padding:"28px 0" },
-  sel:      { background:"#0e1014", border:"1px solid #2e3138", borderRadius:7, color:"#e8e4dc", padding:"9px 11px", fontSize:13, outline:"none" },
-  summChip: { background:"rgba(255,255,255,0.04)", border:"1px solid", borderRadius:8, padding:"8px 14px", fontSize:13 },
-  txCard:   { background:"#111418", border:"1px solid #2a2d32", borderRadius:10, padding:"14px 16px" },
-};
+// ─── Mini components ──────────────────────────────────────────────────────────
+const Sect = ({title,children,T})=>(
+  <div style={{padding:"10px 14px 0"}}>
+    <div style={{fontSize:10,fontWeight:700,color:T.sectLabel,textTransform:"uppercase",
+      letterSpacing:"0.8px",marginBottom:7}}>{title}</div>
+    <div style={{background:T.card,borderRadius:14,padding:"14px",marginBottom:10,
+      boxShadow:T.shadow,border:`1px solid ${T.cardBorder}`}}>
+      {children}
+    </div>
+  </div>
+);
+const SLabel = ({children,T})=>(
+  <div style={{fontSize:11,fontWeight:700,color:T.textMuted,marginBottom:5,textTransform:"uppercase",letterSpacing:"0.3px"}}>
+    {children}
+  </div>
+);
+const QBtn = ({onClick,children,T})=>(
+  <button className="tap"
+    style={{width:38,height:38,borderRadius:9,border:`1.5px solid ${T.ctypeBorder}`,
+      background:T.ctypeBg,fontSize:20,cursor:"pointer",display:"flex",
+      alignItems:"center",justifyContent:"center",flexShrink:0,color:T.text}}
+    onClick={onClick}>{children}</button>
+);
