@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import AuthGate from "./AuthGate.jsx";
 import { supabase as sb } from "./supabase.js";
+import { prepareOrderPayload, roundMoney } from "./orderLogic.js";
 
 // ─── SheetJS ─────────────────────────────────────────────────────────────────
 let xlsxLoadingPromise;
@@ -288,12 +289,10 @@ function ShopApp({ onSignOut }) {
   };
 
   const pickEditPart = (p, idx) => {
-    const newL = [...editLines];
-    newL[idx].partName = p.name;
-    newL[idx].unitPrice = catPrice(p, editOrderData.custType);
-    newL[idx].total = newL[idx].qty * newL[idx].unitPrice;
-
-    setEditLines(newL);
+    const unitPrice = catPrice(p, editOrderData.custType);
+    setEditLines(current => current.map((line, index) => index === idx
+      ? { ...line, partName: p.name, unitPrice, total: roundMoney(Number(line.qty) * unitPrice) }
+      : line));
     setEditShowDrop(null);
   };
   const pickPart = p => { setSelPart(p); setSearch(p.name); setOverPrice(""); setSugg([]); setShowDrop(false); };
@@ -306,32 +305,52 @@ function ShopApp({ onSignOut }) {
 
   const lineTotal = unitPrice() * qty;
   const txTotal = lines.reduce((s, l) => s + l.total, 0);
+  const editTotal = roundMoney(editLines.reduce((sum, line) => {
+    const qtyValue = Number(line.qty);
+    const priceValue = Number(line.unitPrice);
+    return sum + (Number.isFinite(qtyValue) && Number.isFinite(priceValue) ? qtyValue * priceValue : 0);
+  }, 0));
 
   const addLine = () => {
     if (!selPart) return;
     const up = unitPrice();
-    setLines(l => [...l, { partName: selPart.name, qty, unitPrice: up, total: up * qty, note }]);
+    if (!Number.isSafeInteger(Number(qty)) || Number(qty) < 1) {
+      toast$("จำนวนต้องเป็นจำนวนเต็มอย่างน้อย 1", false);
+      return;
+    }
+    if (!Number.isFinite(Number(up)) || Number(up) < 0) {
+      toast$("ราคาต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป", false);
+      return;
+    }
+    const roundedPrice = roundMoney(up);
+    setLines(l => [...l, {
+      partName: selPart.name,
+      qty: Number(qty),
+      unitPrice: roundedPrice,
+      total: roundMoney(roundedPrice * Number(qty)),
+      note,
+    }]);
     setSearch(""); setSelPart(null); setQty(1); setOverPrice(""); setNote("");
     searchRef.current?.focus();
   };
 
   // ─── Save transaction ─────────────────────────────────────────────────────
   const saveTransaction = async () => {
-    if (!lines.length) return;
+    const prepared = prepareOrderPayload({ custType, custName, bikeBrand: bike, paidAmount, lines });
+    if (!prepared.ok) { toast$(prepared.error, false); return; }
+
     setSaving(true);
     try {
-      const { data: order, error } = await sb
-        .from("orders")
-        .insert([{ cust_type: custType, cust_name: custName || "—", bike_brand: bike || "—", total: txTotal, paid_amount: paidAmount }])
-        .select().single();
+      const { data: orderId, error } = await sb.rpc("create_order_atomic", {
+        p_cust_type: prepared.value.custType,
+        p_cust_name: prepared.value.custName,
+        p_bike_brand: prepared.value.bikeBrand,
+        p_paid_amount: prepared.value.paidAmount,
+        p_lines: prepared.value.lines,
+      });
       if (error) throw error;
 
-      const { error: le } = await sb.from("order_lines").insert(
-        lines.map(l => ({ order_id: order.id, part_name: l.partName, qty: l.qty, unit_price: l.unitPrice, total: l.total, note: l.note }))
-      );
-      if (le) throw le;
-
-      toast$("บันทึกสำเร็จ ✅");
+      toast$(`บันทึกออเดอร์ #${orderId} สำเร็จ ✅`);
       setLines([]); setCustName(""); setBike(""); setPaidAmount(0);
       loadOrders();
     } catch (err) {
@@ -365,19 +384,27 @@ function ShopApp({ onSignOut }) {
     setEditLines(tx.lines);
   };
   const saveEditOrder = async () => {
+    const prepared = prepareOrderPayload({
+      custType: editOrderData.custType,
+      custName: editOrderData.custName,
+      bikeBrand: editOrderData.bikeBrand,
+      paidAmount: editOrderData.paidAmount,
+      lines: editLines,
+    });
+    if (!prepared.ok) { toast$(prepared.error, false); return; }
+
     setEditOrderSaving(true);
     try {
-      const { error } = await sb.from("orders").update({
-        cust_name: editOrderData.custName,
-        bike_brand: editOrderData.bikeBrand,
-        cust_type: editOrderData.custType,
-        paid_amount: editOrderData.paidAmount || 0,
-      }).eq("id", editOrderId);
+      const { error } = await sb.rpc("update_order_atomic", {
+        p_order_id: editOrderId,
+        p_cust_type: prepared.value.custType,
+        p_cust_name: prepared.value.custName,
+        p_bike_brand: prepared.value.bikeBrand,
+        p_paid_amount: prepared.value.paidAmount,
+        p_lines: prepared.value.lines,
+      });
       if (error) throw error;
-      await loadOrders(); // 👈 เพิ่มตรงนี้หลัง update สำเร็จ
-      setOrders(o => o.map(x => x.id === editOrderId
-        ? { ...x, custName: editOrderData.custName, bikeBrand: editOrderData.bikeBrand, custType: editOrderData.custType }
-        : x));
+      await loadOrders();
       toast$("แก้ไขแล้ว ✅");
       setEditOrderId(null);
     } catch (err) {
@@ -809,7 +836,7 @@ function ShopApp({ onSignOut }) {
                         value={paidAmount}
                         onChange={e => {
                           const val = +e.target.value;
-                          setPaidAmount(Math.min(val, txTotal));
+                          setPaidAmount(Math.max(0, Math.min(val, txTotal)));
                         }}
                       />
                     </div>
@@ -914,10 +941,9 @@ function ShopApp({ onSignOut }) {
                                 value={ln.partName}
                                 onChange={e => {
                                   const val = e.target.value;
-                                  const newL = [...editLines];
-                                  newL[i].partName = val;
-                                  setEditLines(newL);
-
+                                  setEditLines(current => current.map((line, index) => index === i
+                                    ? { ...line, partName: val }
+                                    : line));
                                   searchEditPart(val, i);
                                 }}
                                 onFocus={() => searchEditPart(ln.partName, i)}
@@ -952,54 +978,63 @@ function ShopApp({ onSignOut }) {
                                 </div>
                               )}
                             </div>
-                            <div style={{ marginTop: 10 }}>
-                              <MiniLabel T={T}>จ่ายแล้ว (บาท)</MiniLabel>
-                              <input
-                                type="number"
-                                style={inp}
-                                value={editOrderData.paidAmount || 0}
-                                onChange={e =>
-                                  setEditOrderData(d => ({
-                                    ...d,
-                                    paidAmount: +e.target.value
-                                  }))
-                                }
-                              />
-                            </div>
-
                             <input
                               type="number"
                               style={{ ...inp, width: 60 }}
+                              min="1"
+                              step="1"
                               value={ln.qty}
                               onChange={e => {
-                                const newL = [...editLines];
-                                newL[i].qty = +e.target.value;
-                                newL[i].total = newL[i].qty * newL[i].unitPrice;
-                                setEditLines(newL);
+                                const value = e.target.value === "" ? "" : Number(e.target.value);
+                                setEditLines(current => current.map((line, index) => index === i
+                                  ? { ...line, qty: value, total: roundMoney(Number(value) * Number(line.unitPrice)) }
+                                  : line));
                               }}
                             />
 
                             <input
                               type="number"
                               style={{ ...inp, width: 80 }}
+                              min="0"
+                              step="0.01"
                               value={ln.unitPrice}
                               onChange={e => {
-                                const newL = [...editLines];
-                                newL[i].unitPrice = +e.target.value;
-                                newL[i].total = newL[i].qty * newL[i].unitPrice;
-                                setEditLines(newL);
+                                const value = e.target.value === "" ? "" : Number(e.target.value);
+                                setEditLines(current => current.map((line, index) => index === i
+                                  ? { ...line, unitPrice: value, total: roundMoney(Number(line.qty) * Number(value)) }
+                                  : line));
                               }}
                             />
 
                             <button onClick={() => {
-                              setEditLines(editLines.filter((_, idx) => idx !== i));
+                              setEditLines(current => current.filter((_, idx) => idx !== i));
                             }}>❌</button>
                           </div>
                         ))}
 
+                        <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap", marginTop: 12 }}>
+                          <div style={{ flex: 1, minWidth: 140, color: T.text, fontWeight: 700, padding: "10px 0" }}>
+                            ยอดรวมรายการ: {fmt(editTotal)} ฿
+                          </div>
+                          <div style={{ flex: 1, minWidth: 160 }}>
+                            <MiniLabel T={T}>💰 จ่ายแล้ว (บาท)</MiniLabel>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              style={inp}
+                              value={editOrderData.paidAmount ?? 0}
+                              onChange={e => setEditOrderData(data => ({
+                                ...data,
+                                paidAmount: e.target.value === "" ? "" : Number(e.target.value),
+                              }))}
+                            />
+                          </div>
+                        </div>
+
                         {/* ➕ เพิ่มรายการใหม่ */}
                         <button onClick={() => {
-                          setEditLines([...editLines, {
+                          setEditLines(current => [...current, {
                             partName: "",
                             qty: 1,
                             unitPrice: 0,
