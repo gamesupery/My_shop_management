@@ -206,15 +206,15 @@ function ShopApp({ onSignOut }) {
       if (error) throw error;
 
       if (data.length === 0) {
-        // First-time seed — insert defaults then load again (once)
-        const { error: seedErr } = await sb.from("parts").insert(
-          DEFAULT_PARTS.map(p => ({
+        // The database lock makes this safe when several devices open an empty catalog together.
+        const { error: seedErr } = await sb.rpc("seed_default_parts_if_empty", {
+          p_parts: DEFAULT_PARTS.map(p => ({
             name: p.name,
             retail_price: p.retailPrice,
             diy_price: p.diyPrice,
             wholesale_price: p.wholesalePrice,
-          }))
-        );
+          })),
+        });
         if (seedErr) throw seedErr;
         // Re-fetch after seed
         const { data: data2, error: e2 } = await sb.from("parts").select("*").order("name");
