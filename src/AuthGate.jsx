@@ -47,6 +47,14 @@ function StatusPage({ title, message, action }) {
   );
 }
 
+const PASSWORD_RESET_REDIRECT_URL = "https://my-shop-management.vercel.app";
+
+function isPasswordRecoveryCallback() {
+  const query = new URLSearchParams(window.location.search);
+  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  return query.get("type") === "recovery" || hash.get("type") === "recovery";
+}
+
 export default function AuthGate({ children }) {
   const [session, setSession] = useState(null);
   const [authReady, setAuthReady] = useState(false);
@@ -54,6 +62,14 @@ export default function AuthGate({ children }) {
   const [password, setPassword] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginError, setLoginError] = useState("");
+  const [requestingPasswordReset, setRequestingPasswordReset] = useState(false);
+  const [passwordRecovery, setPasswordRecovery] = useState(isPasswordRecoveryCallback);
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetError, setResetError] = useState("");
+  const [resetMessage, setResetMessage] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordUpdated, setPasswordUpdated] = useState(false);
   const [membership, setMembership] = useState({ userId: null, status: "idle" });
   const [retryCount, setRetryCount] = useState(0);
   const [signOutError, setSignOutError] = useState("");
@@ -62,17 +78,19 @@ export default function AuthGate({ children }) {
     if (!supabase) return undefined;
 
     let active = true;
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!active) return;
       setSession(nextSession);
       setAuthReady(true);
       setLoginError("");
+      if (event === "PASSWORD_RECOVERY") setPasswordRecovery(true);
     });
 
     supabase.auth.getSession().then(({ data, error }) => {
       if (!active) return;
       setSession(data?.session ?? null);
       setAuthReady(true);
+      if (isPasswordRecoveryCallback()) setPasswordRecovery(true);
       if (error) setLoginError("ตรวจสอบสถานะการเข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่");
     }).catch(() => {
       if (!active) return;
@@ -129,6 +147,58 @@ export default function AuthGate({ children }) {
     }
   };
 
+  const requestPasswordReset = async (event) => {
+    event.preventDefault();
+    if (!supabase) return;
+
+    setResetError("");
+    setResetMessage("");
+    setResetBusy(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(loginEmail.trim(), {
+        redirectTo: PASSWORD_RESET_REDIRECT_URL,
+      });
+      if (error) throw error;
+      setResetMessage("หากอีเมลนี้เป็นบัญชีร้าน ระบบจะส่งลิงก์ให้ กรุณาตรวจกล่องขาเข้าและโฟลเดอร์ Spam");
+    } catch {
+      setResetError("ส่งลิงก์ไม่สำเร็จ กรุณาลองอีกครั้ง หรือตรวจการตั้งค่า URL สำหรับ Auth ใน Supabase");
+    } finally {
+      setResetBusy(false);
+    }
+  };
+
+  const updatePassword = async (event) => {
+    event.preventDefault();
+    if (!supabase) return;
+    if (!session) {
+      setResetError("ลิงก์นี้หมดอายุหรือใช้ไปแล้ว กรุณาขอลิงก์ใหม่");
+      return;
+    }
+    if (newPassword.length < 8) {
+      setResetError("รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setResetError("รหัสผ่านทั้งสองช่องไม่ตรงกัน");
+      return;
+    }
+
+    setResetError("");
+    setResetBusy(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+      setPasswordRecovery(false);
+      setPasswordUpdated(true);
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch {
+      setResetError("เปลี่ยนรหัสผ่านไม่สำเร็จ ลิงก์อาจหมดอายุแล้ว กรุณาขอลิงก์ใหม่");
+    } finally {
+      setResetBusy(false);
+    }
+  };
+
   const signOut = async () => {
     if (!supabase) return;
     setSignOutError("");
@@ -147,6 +217,80 @@ export default function AuthGate({ children }) {
 
   if (!authReady) {
     return <StatusPage title="กำลังตรวจสอบการเข้าสู่ระบบ" message="โปรดรอสักครู่…" />;
+  }
+
+  if (passwordUpdated) {
+    return (
+      <StatusPage
+        title="เปลี่ยนรหัสผ่านแล้ว"
+        message="รหัสผ่านใหม่พร้อมใช้งานแล้ว กดปุ่มด้านล่างเพื่อกลับเข้าร้าน"
+        action={<button type="button" onClick={() => setPasswordUpdated(false)} style={{ marginTop: 18, padding: "10px 16px", border: 0, borderRadius: 8, background: "#2563eb", color: "white", font: "inherit", fontWeight: 700, cursor: "pointer" }}>เข้าใช้งานร้านต่อ</button>}
+      />
+    );
+  }
+
+  if (passwordRecovery) {
+    if (!session) {
+      return (
+        <StatusPage
+          title="ลิงก์รีเซ็ตรหัสผ่านใช้ไม่ได้"
+          message="ลิงก์อาจหมดอายุหรือถูกใช้ไปแล้ว กรุณาขอลิงก์ใหม่จากหน้าเข้าสู่ระบบ"
+          action={<button type="button" onClick={() => { setPasswordRecovery(false); setRequestingPasswordReset(true); }} style={{ marginTop: 18, padding: "10px 16px", border: 0, borderRadius: 8, background: "#2563eb", color: "white", font: "inherit", fontWeight: 700, cursor: "pointer" }}>ขอลิงก์ใหม่</button>}
+        />
+      );
+    }
+
+    return (
+      <main style={pageStyle}>
+        <section style={cardStyle}>
+          <div style={{ textAlign: "center", marginBottom: 22 }}>
+            <div style={{ fontSize: 38, marginBottom: 8 }} aria-hidden="true">🏍️</div>
+            <h1 style={{ fontSize: 23, margin: "0 0 6px", color: "#111827" }}>ตั้งรหัสผ่านใหม่</h1>
+            <p style={{ margin: 0, color: "#64748b", fontSize: 14 }}>ตั้งรหัสผ่านอย่างน้อย 8 ตัวอักษร</p>
+          </div>
+          <form onSubmit={updatePassword}>
+            <div style={{ marginBottom: 15 }}>
+              <label htmlFor="new-password" style={{ display: "block", marginBottom: 6, fontSize: 14, fontWeight: 700 }}>รหัสผ่านใหม่</label>
+              <input id="new-password" type="password" autoComplete="new-password" minLength={8} required value={newPassword} onChange={event => setNewPassword(event.target.value)} style={fieldStyle} />
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <label htmlFor="confirm-password" style={{ display: "block", marginBottom: 6, fontSize: 14, fontWeight: 700 }}>ยืนยันรหัสผ่านใหม่</label>
+              <input id="confirm-password" type="password" autoComplete="new-password" minLength={8} required value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} style={fieldStyle} />
+            </div>
+            {resetError && <p role="alert" style={{ margin: "0 0 14px", color: "#b91c1c", fontSize: 14, lineHeight: 1.5 }}>{resetError}</p>}
+            <button type="submit" disabled={resetBusy} style={{ width: "100%", padding: "12px 14px", border: 0, borderRadius: 9, background: resetBusy ? "#64748b" : "#2563eb", color: "white", font: "inherit", fontSize: 15, fontWeight: 700, cursor: resetBusy ? "wait" : "pointer" }}>
+              {resetBusy ? "กำลังบันทึก…" : "บันทึกรหัสผ่านใหม่"}
+            </button>
+          </form>
+        </section>
+      </main>
+    );
+  }
+
+  if (!session && requestingPasswordReset) {
+    return (
+      <main style={pageStyle}>
+        <section style={cardStyle}>
+          <div style={{ textAlign: "center", marginBottom: 22 }}>
+            <div style={{ fontSize: 38, marginBottom: 8 }} aria-hidden="true">🏍️</div>
+            <h1 style={{ fontSize: 23, margin: "0 0 6px", color: "#111827" }}>ลืมรหัสผ่าน</h1>
+            <p style={{ margin: 0, color: "#64748b", fontSize: 14, lineHeight: 1.6 }}>กรอกอีเมลที่ใช้เข้าระบบ แล้วเราจะส่งลิงก์ตั้งรหัสผ่านใหม่ให้</p>
+          </div>
+          <form onSubmit={requestPasswordReset}>
+            <div style={{ marginBottom: 16 }}>
+              <label htmlFor="reset-email" style={{ display: "block", marginBottom: 6, fontSize: 14, fontWeight: 700 }}>อีเมล</label>
+              <input id="reset-email" type="email" autoComplete="email" required value={loginEmail} onChange={event => setLoginEmail(event.target.value)} style={fieldStyle} />
+            </div>
+            {resetError && <p role="alert" style={{ margin: "0 0 14px", color: "#b91c1c", fontSize: 14, lineHeight: 1.5 }}>{resetError}</p>}
+            {resetMessage && <p role="status" style={{ margin: "0 0 14px", color: "#166534", fontSize: 14, lineHeight: 1.6 }}>{resetMessage}</p>}
+            <button type="submit" disabled={resetBusy} style={{ width: "100%", padding: "12px 14px", border: 0, borderRadius: 9, background: resetBusy ? "#64748b" : "#2563eb", color: "white", font: "inherit", fontSize: 15, fontWeight: 700, cursor: resetBusy ? "wait" : "pointer" }}>
+              {resetBusy ? "กำลังส่งลิงก์…" : "ส่งลิงก์ตั้งรหัสผ่านใหม่"}
+            </button>
+          </form>
+          <button type="button" onClick={() => { setRequestingPasswordReset(false); setResetError(""); setResetMessage(""); }} style={{ width: "100%", marginTop: 14, padding: 8, border: 0, background: "none", color: "#2563eb", font: "inherit", cursor: "pointer" }}>กลับไปหน้าเข้าสู่ระบบ</button>
+        </section>
+      </main>
+    );
   }
 
   if (!session) {
@@ -183,6 +327,16 @@ export default function AuthGate({ children }) {
                 onChange={(event) => setPassword(event.target.value)}
                 style={fieldStyle}
               />
+            </div>
+
+            <div style={{ textAlign: "right", margin: "-6px 0 14px" }}>
+              <button
+                type="button"
+                onClick={() => { setRequestingPasswordReset(true); setLoginError(""); setResetError(""); setResetMessage(""); }}
+                style={{ padding: 0, border: 0, background: "none", color: "#2563eb", font: "inherit", fontSize: 13, cursor: "pointer" }}
+              >
+                ลืมรหัสผ่าน?
+              </button>
             </div>
 
             {loginError && (
