@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import AuthGate from "./AuthGate.jsx";
 import { supabase as sb } from "./supabase.js";
 import { prepareOrderPayload, roundMoney } from "./orderLogic.js";
+import { formatShopDate, formatShopDateTime, shopISODate } from "./dateTime.js";
 
 // ─── SheetJS ─────────────────────────────────────────────────────────────────
 let xlsxLoadingPromise;
@@ -57,6 +58,7 @@ const DEFAULT_PARTS = [
   { name: "จานเบรกหน้า", retailPrice: 850, diyPrice: 800, wholesalePrice: 600 },
   { name: "โช้คหลัง", retailPrice: 1200, diyPrice: 1100, wholesalePrice: 880 },
 ];
+const PARTS_GRID_COLUMNS = "minmax(0, 1fr) 68px 68px 68px 72px";
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 const THEMES = {
@@ -96,9 +98,8 @@ const THEMES = {
 
 // ─── Utils ────────────────────────────────────────────────────────────────────
 const fmt = n => Number(n).toLocaleString("th-TH");
-const p2 = n => String(n).padStart(2, "0");
-const nowISO = () => { const d = new Date(); return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`; };
-const todayTH = () => { const d = new Date(); return `${p2(d.getDate())}/${p2(d.getMonth() + 1)}/${d.getFullYear() + 543}`; };
+const nowISO = () => shopISODate();
+const todayTH = () => formatShopDate();
 const mk = iso => iso?.slice(0, 7) ?? "";
 const mlabel = k => { if (!k) return ""; const [y, m] = k.split("-"); return `${MONTHS_TH[+m - 1]} ${+y + 543}`; };
 const catPrice = (p, t) => { const k = (CUST.find(c => c.id === t) || CUST[0]).key; return p[k] ?? p.retailPrice; };
@@ -126,13 +127,18 @@ function ShopApp({ onSignOut }) {
   const xlsxReady = useXLSX();
   const width = useWidth();
   const wide = width >= 768; // iPad / PC = wide layout
+  const desktop = width >= 1024; // reserve multi-column layouts for space that can fit them
+  const compactParts = width <= 560;
 
   // ─── Theme ───────────────────────────────────────────────────────────────
   const [isDark, setIsDark] = useState(() => {
     try { return localStorage.getItem("moto_theme") === "dark"; } catch { return false; }
   });
   const T = THEMES[isDark ? "dark" : "light"];
-  useEffect(() => { document.body.style.background = T.bg; }, [T.bg]);
+  useEffect(() => {
+    document.body.style.background = T.bg;
+    document.documentElement.style.colorScheme = isDark ? "dark" : "light";
+  }, [T.bg, isDark]);
   const toggleTheme = () => setIsDark(d => {
     const next = !d;
     try { localStorage.setItem("moto_theme", next ? "dark" : "light"); }
@@ -241,9 +247,12 @@ function ShopApp({ onSignOut }) {
         .select("*, order_lines(*)")
         .order("created_at", { ascending: false });
       if (error) throw error;
-      setOrders(data.map(o => ({
+      setOrders(data.map(o => {
+        const createdAt = o.created_at ?? new Date().toISOString();
+        return {
         id: o.id,
-        date: o.created_at?.slice(0, 10) ?? nowISO(),
+        date: shopISODate(createdAt) || nowISO(),
+        dateTime: formatShopDateTime(createdAt),
         custType: o.cust_type,
         custName: o.cust_name,
         bikeBrand: o.bike_brand,
@@ -253,7 +262,8 @@ function ShopApp({ onSignOut }) {
           partName: l.part_name, qty: l.qty,
           unitPrice: l.unit_price, total: l.total, note: l.note ?? "",
         })),
-      })));
+        };
+      }));
     } catch (err) {
       console.error("loadOrders:", err);
       toast$(`โหลดออเดอร์ไม่ได้: ${err.message}`, false);
@@ -537,9 +547,8 @@ function ShopApp({ onSignOut }) {
 
   // ════════════════ RENDER ════════════════════════════════════════════════════
   return (
-    <div style={{ maxWidth: wide ? 1100 : 480, margin: "0 auto", minHeight: "100vh", background: T.bg, paddingBottom: wide ? 40 : 90, fontFamily: "'Sarabun',sans-serif" }}>
+    <div style={{ width: "100%", maxWidth: wide ? 1280 : 480, margin: "0 auto", minHeight: "100vh", background: T.bg, paddingBottom: wide ? 40 : 90, fontFamily: "'Sarabun',sans-serif" }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800&display=swap');
         *{box-sizing:border-box;margin:0;padding:0;}
         input,select,button,textarea{font-family:'Sarabun',sans-serif;}
         input:focus,select:focus{outline:none;border-color:${T.tabActive}!important;}
@@ -652,8 +661,8 @@ function ShopApp({ onSignOut }) {
       {tab === "order" && (
         <div style={{ padding: wide ? "20px 0" : "10px 0" }}>
           <div style={{
-            display: wide ? "grid" : "block",
-            gridTemplateColumns: wide ? "1fr 420px" : undefined,
+            display: desktop ? "grid" : "block",
+            gridTemplateColumns: desktop ? "minmax(0, 1fr) minmax(360px, 420px)" : undefined,
             gap: wide ? 20 : 0,
             padding: wide ? "0 24px" : 0,
             alignItems: "start",
@@ -790,7 +799,7 @@ function ShopApp({ onSignOut }) {
             </div>
 
             {/* RIGHT: order summary */}
-            <div style={{ position: wide ? "sticky" : undefined, top: wide ? 100 : undefined }}>
+            <div style={{ position: desktop ? "sticky" : undefined, top: desktop ? 100 : undefined }}>
               <Card T={T} pad={PAD} wide={wide}>
                 <SLabel T={T}>🧾 รายการในออเดอร์ ({lines.length} รายการ)</SLabel>
                 {lines.length === 0 ? (
@@ -895,12 +904,12 @@ function ShopApp({ onSignOut }) {
           </div>
 
           {/* Summary chips */}
-          <div style={{ display: "flex", gap: 10, margin: wide ? "14px 0" : "0 14px 12px", flexWrap: "wrap" }}>
+          <div style={{ display: "grid", gridTemplateColumns: wide ? "repeat(3, minmax(0, 1fr))" : "repeat(auto-fit, minmax(min(100%, 140px), 1fr))", gap: 10, margin: wide ? "14px 0" : "0 14px 12px", alignItems: "stretch" }}>
             {CUST.map(c => {
               const r = hRows.filter(o => o.custType === c.id);
               return (
                 <div key={c.id} style={{
-                  flex: 1, minWidth: 110, background: T.card, borderRadius: 10,
+                  minWidth: 0, height: "100%", background: T.card, borderRadius: 10,
                   padding: "11px 14px", borderLeft: `3px solid ${c.color}`, boxShadow: T.shadow, border: `1px solid ${T.cardBorder}`
                 }}>
                   <div style={{ fontSize: 11, color: T.textSub, fontWeight: 600 }}>{c.icon} {c.th}</div>
@@ -914,7 +923,7 @@ function ShopApp({ onSignOut }) {
           {loadingOrders && <div style={{ textAlign: "center", color: T.textMuted, padding: 32 }}>⏳ กำลังโหลด…</div>}
           {!loadingOrders && hRows.length === 0 && <div style={{ textAlign: "center", color: T.textMuted, padding: 32 }}>ไม่มีข้อมูลในเดือนนี้</div>}
 
-          <div style={{ display: wide ? "grid" : "block", gridTemplateColumns: wide ? "1fr 1fr" : undefined, gap: wide ? 14 : 0 }}>
+          <div style={{ display: desktop ? "grid" : "block", gridTemplateColumns: desktop ? "repeat(2, minmax(0, 1fr))" : undefined, gap: desktop ? 14 : 0 }}>
             {hRows.map(tx => {
               const ct = CUST.find(c => c.id === tx.custType);
               const remain = tx.total - (tx.paidAmount || 0);
@@ -1094,7 +1103,7 @@ function ShopApp({ onSignOut }) {
                         </span>
                         <span style={{ fontWeight: 700, color: T.text }}>{tx.custName}</span>
                         <span style={{ color: T.textMuted, fontSize: 13 }}>🏍️ {tx.bikeBrand}</span>
-                        <span style={{ color: T.textMuted, fontSize: 12, marginLeft: "auto" }}>{tx.date}</span>
+                        <span title={tx.dateTime || tx.date} style={{ color: T.textMuted, fontSize: 12, marginLeft: "auto", whiteSpace: "nowrap" }}>{tx.dateTime || tx.date}</span>
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
                         <span style={{ fontSize: 20, fontWeight: 800, color: T.text, flex: 1 }}>{fmt(tx.total)} ฿</span>
@@ -1169,7 +1178,7 @@ function ShopApp({ onSignOut }) {
       {/* ════════════════ TAB: PARTS ════════════════ */}
       {tab === "parts" && (
         <div style={{ padding: wide ? "20px 24px" : "10px 0" }}>
-          <div style={{ display: wide ? "grid" : "block", gridTemplateColumns: wide ? "400px 1fr" : undefined, gap: wide ? 20 : 0, alignItems: "start" }}>
+          <div style={{ display: desktop ? "grid" : "block", gridTemplateColumns: desktop ? "minmax(340px, 380px) minmax(0, 1fr)" : undefined, gap: desktop ? 20 : 0, alignItems: "start" }}>
 
             {/* Add new part */}
             <div style={{ ...card, margin: wide ? 0 : "0 14px 12px" }}>
@@ -1206,7 +1215,7 @@ function ShopApp({ onSignOut }) {
 
               {/* Header */}
               <div style={{
-                display: "grid", gridTemplateColumns: "1fr 68px 68px 68px 72px",
+                display: compactParts ? "none" : "grid", gridTemplateColumns: PARTS_GRID_COLUMNS,
                 gap: 6, padding: "10px 6px 8px", borderBottom: `1px solid ${T.divider}`, marginTop: 10
               }}>
                 {[{ l: "ชื่ออะไหล่", c: T.textMuted }, { l: "ทั่วไป", c: "#3b82f6" }, { l: "DIY", c: "#22c55e" }, { l: "ส่ง", c: "#f97316" }, { l: "", c: "" }]
@@ -1229,8 +1238,8 @@ function ShopApp({ onSignOut }) {
                     }}>
                     {isEditing ? (
                       <div style={{ padding: "10px 6px" }}>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 80px 80px", gap: 8, marginBottom: 8 }}>
-                          <div>
+                        <div style={{ display: "grid", gridTemplateColumns: compactParts ? "repeat(3, minmax(0, 1fr))" : "minmax(0, 1fr) 80px 80px 80px", gap: 8, marginBottom: 8 }}>
+                          <div style={{ gridColumn: compactParts ? "1 / -1" : undefined }}>
                             <MiniLabel T={T}>ชื่อ</MiniLabel>
                             <input style={{ ...inp, fontSize: 13 }} value={editPartData.name}
                               onChange={e => setEditPartData(d => ({ ...d, name: e.target.value }))} />
@@ -1271,14 +1280,14 @@ function ShopApp({ onSignOut }) {
                       </div>
                     ) : (
                       <div style={{
-                        display: "grid", gridTemplateColumns: "1fr 68px 68px 68px 72px",
+                        display: "grid", gridTemplateColumns: compactParts ? "repeat(3, minmax(0, 1fr))" : PARTS_GRID_COLUMNS,
                         gap: 6, padding: "10px 6px", alignItems: "center"
                       }}>
-                        <div style={{ fontWeight: 600, fontSize: 14, color: T.text }}>{p.name}</div>
-                        <div style={{ textAlign: "right", fontSize: 13, color: "#3b82f6", fontWeight: 600 }}>{fmt(p.retailPrice)}</div>
-                        <div style={{ textAlign: "right", fontSize: 13, color: "#22c55e", fontWeight: 600 }}>{fmt(p.diyPrice)}</div>
-                        <div style={{ textAlign: "right", fontSize: 13, color: "#f97316", fontWeight: 600 }}>{fmt(p.wholesalePrice)}</div>
-                        <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
+                        <div style={{ gridColumn: compactParts ? "1 / -1" : undefined, fontWeight: 600, fontSize: 14, color: T.text, overflowWrap: "anywhere" }}>{p.name}</div>
+                        <div className="part-price-cell" data-label="ทั่วไป" style={{ display: compactParts ? "flex" : undefined, flexDirection: compactParts ? "column" : undefined, textAlign: compactParts ? "left" : "right", fontSize: 13, color: "#3b82f6", fontWeight: 600 }}>{fmt(p.retailPrice)}</div>
+                        <div className="part-price-cell" data-label="DIY" style={{ display: compactParts ? "flex" : undefined, flexDirection: compactParts ? "column" : undefined, textAlign: compactParts ? "left" : "right", fontSize: 13, color: "#22c55e", fontWeight: 600 }}>{fmt(p.diyPrice)}</div>
+                        <div className="part-price-cell" data-label="ส่ง" style={{ display: compactParts ? "flex" : undefined, flexDirection: compactParts ? "column" : undefined, textAlign: compactParts ? "left" : "right", fontSize: 13, color: "#f97316", fontWeight: 600 }}>{fmt(p.wholesalePrice)}</div>
+                        <div style={{ gridColumn: compactParts ? "1 / -1" : undefined, display: "flex", gap: 4, justifyContent: "flex-end" }}>
                           <button title="แก้ไข" onClick={() => startEditPart(p)}
                             style={{
                               background: "none", border: `1px solid ${T.inpBorder}`, color: T.textSub,
