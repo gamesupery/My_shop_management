@@ -16,9 +16,10 @@ declare
   v_wholesale_price numeric;
   v_inserted integer;
 begin
-  if p_parts is null or jsonb_typeof(p_parts) <> 'array'
-     or jsonb_array_length(p_parts) = 0
-     or jsonb_array_length(p_parts) > 100 then
+  if p_parts is null or jsonb_typeof(p_parts) <> 'array' then
+    raise exception using errcode = '22023', message = 'Seed list must be a JSON array';
+  end if;
+  if jsonb_array_length(p_parts) = 0 or jsonb_array_length(p_parts) > 100 then
     raise exception using errcode = '22023', message = 'Seed list must contain between 1 and 100 products';
   end if;
 
