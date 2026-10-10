@@ -1,26 +1,37 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-
+import AuthGate from "./AuthGate.jsx";
+import { supabase as sb } from "./supabase.js";
 
 // ─── SheetJS ─────────────────────────────────────────────────────────────────
+let xlsxLoadingPromise;
+
+function loadXlsxScript() {
+  if (window.XLSX) return Promise.resolve();
+  if (!xlsxLoadingPromise) {
+    xlsxLoadingPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+      script.onload = resolve;
+      script.onerror = () => reject(new Error("Unable to load SheetJS"));
+      document.head.appendChild(script);
+    });
+  }
+  return xlsxLoadingPromise;
+}
+
 function useXLSX() {
-  const [ready, setReady] = useState(!!window.XLSX);
+  const [ready, setReady] = useState(() => Boolean(window.XLSX));
   useEffect(() => {
-    if (window.XLSX) { setReady(true); return; }
-    const s = document.createElement("script");
-    s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-    s.onload = () => setReady(true);
-    document.head.appendChild(s);
+    let active = true;
+    if (!window.XLSX) {
+      loadXlsxScript()
+        .then(() => { if (active) setReady(true); })
+        .catch((error) => console.error(error));
+    }
+    return () => { active = false; };
   }, []);
   return ready;
 }
-
-// ─── Supabase ─────────────────────────────────────────────────────────────────
-import { createClient } from "@supabase/supabase-js";
-
-const sb = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_KEY
-);
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const CUST = [
@@ -90,6 +101,12 @@ const todayTH = () => { const d = new Date(); return `${p2(d.getDate())}/${p2(d.
 const mk = iso => iso?.slice(0, 7) ?? "";
 const mlabel = k => { if (!k) return ""; const [y, m] = k.split("-"); return `${MONTHS_TH[+m - 1]} ${+y + 543}`; };
 const catPrice = (p, t) => { const k = (CUST.find(c => c.id === t) || CUST[0]).key; return p[k] ?? p.retailPrice; };
+const mapPart = r => ({
+  id: r.id, name: r.name,
+  retailPrice: r.retail_price,
+  diyPrice: r.diy_price,
+  wholesalePrice: r.wholesale_price,
+});
 
 // ─── useWidth hook ────────────────────────────────────────────────────────────
 function useWidth() {
@@ -104,7 +121,7 @@ function useWidth() {
 
 
 // ════════════════════════════════════════════════════════════════════════════
-export default function App() {
+function ShopApp({ onSignOut }) {
   const xlsxReady = useXLSX();
   const width = useWidth();
   const wide = width >= 768; // iPad / PC = wide layout
@@ -114,10 +131,11 @@ export default function App() {
     try { return localStorage.getItem("moto_theme") === "dark"; } catch { return false; }
   });
   const T = THEMES[isDark ? "dark" : "light"];
-  useEffect(() => { document.body.style.background = T.bg; }, [isDark]);
+  useEffect(() => { document.body.style.background = T.bg; }, [T.bg]);
   const toggleTheme = () => setIsDark(d => {
     const next = !d;
-    try { localStorage.setItem("moto_theme", next ? "dark" : "light"); } catch { }
+    try { localStorage.setItem("moto_theme", next ? "dark" : "light"); }
+    catch (error) { console.warn("Theme preference could not be saved:", error); }
     return next;
   });
 
@@ -213,13 +231,6 @@ export default function App() {
   const [editSugg, setEditSugg] = useState([]);
   const [editShowDrop, setEditShowDrop] = useState(null); // เก็บ index ของแถวที่เปิด
   const [editLines, setEditLines] = useState([]);
-  const mapPart = r => ({
-    id: r.id, name: r.name,
-    retailPrice: r.retail_price,
-    diyPrice: r.diy_price,
-    wholesalePrice: r.wholesale_price,
-  });
-
   // ─── Load orders ──────────────────────────────────────────────────────────
   const loadOrders = useCallback(async () => {
     setLoadingOrders(true);
@@ -250,7 +261,13 @@ export default function App() {
     }
   }, []);
 
-  useEffect(() => { loadParts(); loadOrders(); }, []);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      void loadParts();
+      void loadOrders();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [loadParts, loadOrders]);
 
   // ─── Order form logic ─────────────────────────────────────────────────────
   const doSearch = val => {
@@ -368,54 +385,6 @@ export default function App() {
     } finally {
       setEditOrderSaving(false);
     }
-    const saveEditOrder = async () => {
-      setEditOrderSaving(true);
-      try {
-        // 1. update order
-        const { error } = await sb.from("orders").update({
-          cust_name: editOrderData.custName,
-          bike_brand: editOrderData.bikeBrand,
-          cust_type: editOrderData.custType,
-          paid_amount: editOrderData.paidAmount,
-          total: editLines.reduce((s, l) => s + l.total, 0) // 👈 สำคัญ
-        }).eq("id", editOrderId);
-        if (error) throw error;
-
-        // 2. ลบของเก่า
-        await sb.from("order_lines").insert(
-          editLines.map(l => ({
-            order_id: editOrderId,
-            part_name: l.partName,
-            qty: l.qty,
-            unit_price: l.unitPrice,
-            total: l.total,
-            note: l.note
-          }))
-        );
-
-        // 3. insert ใหม่
-        await sb.from("order_lines").insert(
-          editLines.map(l => ({
-            order_id: editOrderId,
-            part_name: l.partName,
-            qty: l.qty,
-            unit_price: l.unitPrice,
-            total: l.total,
-            note: l.note
-          }))
-        );
-
-        // 4. update UI
-        loadOrders();
-        setEditOrderId(null);
-        toast$("แก้ไขแล้ว ✅");
-
-      } catch (err) {
-        toast$(`แก้ไขไม่สำเร็จ: ${err.message}`, false);
-      } finally {
-        setEditOrderSaving(false);
-      }
-    };
   };
 
   // ─── Add part ─────────────────────────────────────────────────────────────
@@ -531,7 +500,6 @@ export default function App() {
     fontSize: 14, color: T.inpText, background: T.inp,
     fontFamily: "inherit", outline: "none", transition: "border-color 0.15s",
   };
-  const inpFocus = { borderColor: T.tabActive };
   const card = {
     background: T.card, borderRadius: 12, padding: "16px",
     marginBottom: 12, boxShadow: T.shadow, border: `1px solid ${T.cardBorder}`,
@@ -583,8 +551,8 @@ export default function App() {
             <div style={{ fontSize: 11, color: T.textMuted, marginTop: 1 }}>ระบบบันทึกการขาย</div>
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: T.textSub, background: isDark ? "#21262d" : "#f3f4f6", padding: "5px 12px", borderRadius: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: wide ? 12 : 6 }}>
+          <div style={{ display: wide ? "block" : "none", fontSize: 12, fontWeight: 600, color: T.textSub, background: isDark ? "#21262d" : "#f3f4f6", padding: "5px 12px", borderRadius: 20 }}>
             {dateStr}
           </div>
           {/* Theme toggle */}
@@ -600,6 +568,11 @@ export default function App() {
               transition: "left 0.25s", display: "flex", alignItems: "center",
               justifyContent: "center", fontSize: 12,
             }}>{isDark ? "🌙" : "☀️"}</div>
+          </button>
+          <button type="button" className="tap" onClick={onSignOut}
+            aria-label="ออกจากระบบ" title="ออกจากระบบ"
+            style={{ height: 36, padding: "0 9px", borderRadius: 8, border: `1px solid ${T.inpBorder}`, background: "transparent", color: T.textSub, fontSize: 12, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>
+            ออก
           </button>
         </div>
       </div>
@@ -1322,3 +1295,11 @@ const QBtn = ({ onClick, children, T }) => (
     }}
     onClick={onClick}>{children}</button>
 );
+
+export default function App() {
+  return (
+    <AuthGate>
+      {({ onSignOut }) => <ShopApp onSignOut={onSignOut} />}
+    </AuthGate>
+  );
+}

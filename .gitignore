@@ -12,6 +12,12 @@ dist
 dist-ssr
 *.local
 
+# Environment variables (keep only the safe template in Git)
+.env
+.env.*
+!.env.example
+.vercel
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
