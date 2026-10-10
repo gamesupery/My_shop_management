@@ -151,6 +151,7 @@ function ShopApp({ onSignOut }) {
   const [toast, setToast] = useState(null);
   const [parts, setParts] = useState([]);
   const [partsReady, setPartsReady] = useState(false);
+  const [partsSearch, setPartsSearch] = useState("");
   const [orders, setOrders] = useState([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
 
@@ -529,6 +530,10 @@ function ShopApp({ onSignOut }) {
   const allMonths = [...new Set(orders.map(o => mk(o.date)))].sort().reverse();
   const hRows = orders.filter(o => mk(o.date) === fMonth && (fType === "all" || o.custType === fType));
   const hTotal = hRows.reduce((s, o) => s + o.total, 0);
+  const normalizedPartsSearch = partsSearch.trim().toLowerCase();
+  const filteredParts = normalizedPartsSearch
+    ? parts.filter(part => part.name.toLowerCase().includes(normalizedPartsSearch))
+    : parts;
 
   // ─── Shared style builders ────────────────────────────────────────────────
   const inp = {
@@ -1211,7 +1216,31 @@ function ShopApp({ onSignOut }) {
 
             {/* Parts list */}
             <div style={{ ...card, margin: wide ? 0 : "0 14px 12px" }}>
-              <SLabel T={T}>รายการอะไหล่ทั้งหมด ({parts.length} รายการ)</SLabel>
+              <SLabel T={T}>รายการอะไหล่</SLabel>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+                <input
+                  type="search"
+                  aria-label="ค้นหาชื่ออะไหล่"
+                  placeholder="พิมพ์ชื่ออะไหล่ที่ต้องการแก้ราคา"
+                  value={partsSearch}
+                  onChange={event => setPartsSearch(event.target.value)}
+                  onKeyDown={event => { if (event.key === "Escape") setPartsSearch(""); }}
+                  style={{ ...inp, flex: "1 1 auto", width: "auto", minWidth: 0 }}
+                />
+                {partsSearch && (
+                  <button
+                    type="button"
+                    className="tap"
+                    aria-label="ล้างคำค้นหา"
+                    title="ล้างคำค้นหา"
+                    onClick={() => setPartsSearch("")}
+                    style={{ height: 42, padding: "0 14px", border: `1px solid ${T.inpBorder}`, borderRadius: 8, background: "transparent", color: T.textSub, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}
+                  >ล้าง</button>
+                )}
+              </div>
+              <div role="status" aria-live="polite" style={{ fontSize: 12, color: T.textMuted, marginTop: 7 }}>
+                {normalizedPartsSearch ? `พบ ${filteredParts.length} จาก ${parts.length} รายการ` : `แสดง ${parts.length} รายการ`}
+              </div>
 
               {/* Header */}
               <div style={{
@@ -1226,7 +1255,15 @@ function ShopApp({ onSignOut }) {
 
               {!partsReady && <div style={{ textAlign: "center", color: T.textMuted, padding: 24 }}>⏳ กำลังโหลด…</div>}
 
-              {parts.map(p => {
+              {partsReady && filteredParts.length === 0 && (
+                <div role="status" style={{ textAlign: "center", color: T.textMuted, padding: 28 }}>
+                  {normalizedPartsSearch
+                    ? `ไม่พบอะไหล่ที่ตรงกับ “${partsSearch.trim()}”`
+                    : "ยังไม่มีรายการอะไหล่"}
+                </div>
+              )}
+
+              {filteredParts.map(p => {
                 const isEditing = editPartId === p.id;
                 return (
                   <div key={p.id} className="row-hover"
